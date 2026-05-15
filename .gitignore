@@ -8,5 +8,3 @@ vite.config.ts.*
 .env
 .env.local
 *.log
-api/*
-!api/.gitkeep
