@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { setupAuth } from "./fakeAuth";
 import { z } from "zod";
 import { storage } from "./storage";
-import { insertSolarProjectSchema, type CalculationResults, type MonthlyConsumption, type TimeFactors, IndustrialTariffsSchema, TimeFactorsSchema, MonthlyConsumptionSchema } from "@shared/schema";
+import { insertSolarProjectSchema, type CalculationResults, type MonthlyConsumption, type TimeFactors, IndustrialTariffsSchema, TimeFactorsSchema, MonthlyConsumptionSchema } from "../shared/schema";
 
 export async function registerRoutes(app: Express): Promise<void> {
   // Setup fake (demo) authentication routes — replaces Replit/Google OAuth.
