@@ -11,7 +11,7 @@ import {
   type InsertSolarProject,
   type CalculationResults,
   TARIFF_PRESETS,
-} from "@shared/schema";
+} from "../shared/schema";
 import { randomUUID } from "crypto";
 
 export interface IStorage {
