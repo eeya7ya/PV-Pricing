@@ -4,12 +4,12 @@
   "outputDirectory": "dist/public",
   "framework": null,
   "functions": {
-    "api/index.ts": {
+    "api/handler.mjs": {
       "maxDuration": 30
     }
   },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/api/(.*)", "destination": "/api/handler" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }
