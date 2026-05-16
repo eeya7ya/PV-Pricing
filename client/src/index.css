@@ -271,3 +271,156 @@
     inset: -1px;
   }
 }
+/* ===========================================================================
+   Technical Report — print-only export sheet
+   =========================================================================== */
+
+/* On screen: hide the report entirely */
+.technical-report-print {
+  display: none;
+}
+
+@media print {
+  /* Hide everything except the report */
+  body * { visibility: hidden; }
+  .technical-report-print,
+  .technical-report-print * { visibility: visible; }
+
+  .technical-report-print {
+    display: block;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    color: #111;
+    background: #fff;
+    font-family: 'Inter', sans-serif;
+    font-size: 10pt;
+    line-height: 1.4;
+  }
+
+  @page {
+    size: A4 portrait;
+    margin: 14mm 12mm 14mm 12mm;
+  }
+
+  /* ---- Header: logo centered ---- */
+  .tr-header {
+    text-align: center;
+    border-bottom: 2px solid #1f1aa3;
+    padding-bottom: 10mm;
+    margin-bottom: 8mm;
+  }
+  .tr-logo {
+    display: block;
+    margin: 0 auto 4mm;
+    width: 38mm;
+    height: auto;
+  }
+  .tr-title {
+    font-size: 16pt;
+    font-weight: 700;
+    margin: 0 0 2mm;
+    color: #1f1aa3;
+  }
+  .tr-subtitle {
+    font-size: 10pt;
+    color: #444;
+    margin-bottom: 1mm;
+  }
+  .tr-meta {
+    font-size: 9pt;
+    color: #666;
+  }
+
+  /* ---- Sections ---- */
+  .tr-section {
+    margin-bottom: 6mm;
+    page-break-inside: avoid;
+  }
+  .tr-section h2 {
+    font-size: 12pt;
+    font-weight: 600;
+    color: #1f1aa3;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 1mm;
+    margin: 0 0 3mm 0;
+  }
+  .tr-page-break { page-break-before: always; }
+
+  /* ---- Key/value tables ---- */
+  .tr-kv {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9.5pt;
+  }
+  .tr-kv th,
+  .tr-kv td {
+    padding: 1.5mm 2mm;
+    border: 1px solid #e5e5e5;
+    text-align: left;
+    vertical-align: top;
+  }
+  .tr-kv th {
+    width: 22%;
+    background: #f7f7fb;
+    font-weight: 600;
+    color: #333;
+  }
+  .tr-kv td {
+    width: 28%;
+    font-variant-numeric: tabular-nums;
+  }
+  .tr-emph {
+    font-weight: 700;
+    color: #0a7d2a;
+  }
+
+  /* ---- Monthly table ---- */
+  .tr-monthly {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 8.5pt;
+    font-variant-numeric: tabular-nums;
+  }
+  .tr-monthly th,
+  .tr-monthly td {
+    border: 1px solid #d8d8d8;
+    padding: 1mm 1.5mm;
+    text-align: right;
+  }
+  .tr-monthly th {
+    background: #1f1aa3;
+    color: #fff;
+    font-weight: 600;
+    text-align: center;
+  }
+  .tr-monthly tr.tr-totals td {
+    background: #f7f7fb;
+    font-weight: 700;
+    border-top: 2px solid #1f1aa3;
+  }
+  .tr-monthly tbody td:first-child { text-align: left; font-weight: 500; }
+
+  /* ---- References list ---- */
+  .tr-refs {
+    margin: 0;
+    padding-left: 5mm;
+    font-size: 9pt;
+    color: #333;
+  }
+  .tr-refs li { margin-bottom: 1mm; }
+
+  /* ---- Footer ---- */
+  .tr-footer {
+    position: fixed;
+    bottom: 4mm;
+    left: 12mm;
+    right: 12mm;
+    font-size: 8pt;
+    color: #888;
+    display: flex;
+    justify-content: space-between;
+    border-top: 1px solid #ddd;
+    padding-top: 2mm;
+  }
+}

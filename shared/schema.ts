@@ -5,7 +5,52 @@ import { z } from "zod";
 
 // Customer Types and Grid Connection Methods
 export const CUSTOMER_TYPES = ['Residential', 'Industrial', 'Commercial', 'Hotels', 'Hospitals', 'Agriculture'] as const;
-export const GRID_CONNECTION_METHODS = ['Net billing', 'wheeling', 'Zero export', 'Buy all sell all'] as const;
+// Grid connection method = Bylaw 58/2024 four-mechanism enumeration + M5
+// legacy net metering (grandfathered pre-1/6/2024 systems).
+//   'Net billing'         → Mechanism 2 (Net Value On-site)
+//   'wheeling'            → Mechanism 1 (Net Value Off-site)
+//   'Zero export'         → Mechanism 3 (Zero Export, battery allowed)
+//   'Buy all sell all'    → Mechanism 4 (separate meter; no grid fee)
+//   'Legacy net metering' → Mechanism 5 (pre-1/6/2024 grandfathered, 1:1 kWh)
+export const GRID_CONNECTION_METHODS = ['Net billing', 'wheeling', 'Zero export', 'Buy all sell all', 'Legacy net metering'] as const;
+
+// Re-export Jordan tariff sector codes so the calculator/UI can reference them.
+export {
+  type SectorCode,
+  type CustomerClass,
+  type NetBillingMechanism,
+  type WasteClass,
+  type EligibilityStatus,
+  type AnnualResetPolicy,
+  SECTOR_TARIFFS,
+  SECTOR_TO_CLASS,
+  defaultSectorFor,
+  RURAL_FILS_PER_KWH,
+  TV_FEE_JD_PER_MONTH,
+  METER_RENT_JD,
+  MIN_BILL_JD,
+  FUEL_CLAUSE_FILS_BY_MONTH,
+  EV_PUBLIC_OPERATOR_COMMISSION_FILS,
+  SUBSIDY_LOSS_TRIGGER_KW,
+  // PV sizing (EMRC standard yield + DC:AC + residential caps)
+  SPECIFIC_YIELD_KWH_PER_KWP_YEAR,
+  SPECIFIC_YIELD_KWH_PER_KWP_MONTH,
+  DC_AC_RATIO,
+  RESIDENTIAL_INVERTER_CAP_KWAC,
+  kWpFromKWac,
+  kWacFromKWp,
+  inverterKWacFromMonthlyKWh,
+  applyResidentialInverterCap,
+  mechanismGenerationCapFraction,
+  isEligibleForMechanism,
+  WHEELING_TOU_WINDOWS,
+  LEGACY_EXPORT_HAIRCUT,
+  legacyNetMeteringMonthly,
+  DEFAULT_ANNUAL_RESET_POLICY,
+  applyAnnualReset,
+  BYLAW_58_CUTOVER_DATE,
+  isLegacyEligible,
+} from './jordanTariffs';
 
 // Tariff Categories for Dynamic System
 export const TARIFF_CATEGORIES = ['Residential', 'Industrial', 'Custom'] as const;
@@ -126,7 +171,26 @@ export const AnnualSummarySchema = z.object({
   // Net billing system fields
   net_billing_savings: z.number().optional(),
   final_credit_balance: z.number().optional(),
-  total_savings_with_net_billing: z.number().optional()
+  total_savings_with_net_billing: z.number().optional(),
+  // Bylaw 58/2024 grid service fee
+  grid_service_fee_jd_per_month: z.number().optional(),
+  grid_service_fee_jd_annual: z.number().optional(),
+  // Jordan EMRC 2025 sector dispatch metadata
+  sector: z.string().optional(),
+  sector_label: z.string().optional(),
+  net_billing_mechanism: z.string().optional(),
+  // PV sizing outputs (EMRC standard yield 1,800 kWh/kWp/yr + DC:AC)
+  kwp_dc: z.number().optional(),
+  dc_ac_ratio: z.number().optional(),
+  specific_yield_kwh_per_kwp_year: z.number().optional(),
+  inverter_cap_kwac: z.number().nullable().optional(),
+  inverter_cap_binding: z.boolean().optional(),
+  mechanism_cap_fraction: z.number().optional(),
+  loses_residential_subsidy: z.boolean().optional(),
+  eligibility_status: z.enum(['eligible', 'ineligible', 'unclear']).optional(),
+  annual_reset_policy: z.string().optional(),
+  forfeited_credit_jd: z.number().optional(),
+  cashed_out_credit_jd: z.number().optional()
 });
 
 

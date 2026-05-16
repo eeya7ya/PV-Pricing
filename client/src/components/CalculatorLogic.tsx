@@ -14,6 +14,40 @@ import type {
   TARIFF_PRESETS
 } from '@shared/schema';
 import { applyTariffPreset, TariffEngine } from '@/lib/tariffEngine';
+import {
+  calcUniversalAddOns,
+  applyMinimumBillJD,
+  defaultSectorFor,
+  SPECIFIC_YIELD_KWH_PER_KWP_MONTH,
+  inverterKWacFromMonthlyKWh,
+  type SectorCode,
+  type NetBillingMechanism,
+} from '@shared/jordanTariffs';
+
+/**
+ * Map the project's grid-connection labels onto the Bylaw 58/2024 + legacy
+ * enumeration of five operative PV grid-connection mechanisms.
+ *   Net billing         → Mechanism 2 (Net Value On-site)
+ *   wheeling            → Mechanism 1 (Net Value Off-site)
+ *   Zero export         → Mechanism 3 (Zero Export, battery allowed)
+ *   Buy all sell all    → Mechanism 4 (separate meter; zero grid fee)
+ *   Legacy net metering → Mechanism 5 (pre-1/6/2024 grandfathered, 1:1 kWh)
+ */
+function mechanismFor(gridConnection: GridConnection): NetBillingMechanism {
+  switch (gridConnection) {
+    case 'wheeling':
+      return 'M1_net_value_offsite';
+    case 'Zero export':
+      return 'M3_zero_export';
+    case 'Buy all sell all':
+      return 'M4_buy_all_sell_all';
+    case 'Legacy net metering':
+      return 'M5_legacy_net_metering';
+    case 'Net billing':
+    default:
+      return 'M2_net_value_onsite';
+  }
+}
 
 interface CalculatorState {
   customerType: CustomerType;
@@ -214,10 +248,11 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
   }, []);
 
   const calculateTaxes = useCallback((generation: number, efficiency: number): number => {
-    // Formula: TX = (X2 / (130 * efficiency)) * 1
-    if (generation > 0 && efficiency > 0) {
-      return (generation / (130 * efficiency)) * 1;
-    }
+    // Legacy "TX" formula was (X2 / (130 * efficiency)) * 1. EMRC abolished
+    // demand charges in 2024 and the PV round adopted the standard yield of
+    // 150 kWh/kWp/month (1,800 kWh/kWp/yr). No tax/demand layer applies to
+    // PV generation under any Bylaw 58/2024 mechanism — return 0.
+    void generation; void efficiency;
     return 0;
   }, []);
 
@@ -300,63 +335,82 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
     // Calculate monthly data
     const monthlyData = [];
     const isSmallIndustrial = industrialConfig.type === 'Small Industrial';
-    
+    // Resolve sector for add-ons / min-bill (Industrial → C1 small or C2 medium).
+    const industrialSector: SectorCode = isSmallIndustrial
+      ? 'C1_small_industrial'
+      : 'C2_medium_industrial';
+
     let totalImportCost = 0;
     let totalExportRevenue = 0;
     let totalTaxes = 0;
     let totalNetCost = 0;
-    
+    let totalCostWithoutPV = 0;
+
     for (let i = 0; i < 12; i++) {
       const month = months[i];
       const consumption = monthlyConsumption[i];
-      
+
       // Use X2 approximation for generation
       const generation = x2Approximate;
-      
+
       // Calculate import tariff using Industrial period-based calculation
-      const { totalImportTariff: importTariff, periodDetails } = calculateIndustrialImportTariff(consumption, isSmallIndustrial);
-      
-      // Calculate taxes based on X2 (in PyQt6 code: X2 * 0.04, but implemented as X2 * 0)
-      const taxes = generation * 0; // No taxes for Industrial per PyQt6 code
-      
-      // Calculate export tariff based on X2 and export rate
+      const { totalImportTariff: importTariff, periodDetails } = calculateIndustrialImportTariff(
+        consumption,
+        isSmallIndustrial,
+      );
+
+      // No demand charge / taxes layer in EMRC 2025 (demand charges abolished).
+      const taxes = 0;
+
+      // Calculate export tariff (Buy-All-Sell-All flat export rate).
       const exportTariff = generation * exportRate;
-      
-      // Calculate NET tariff: (Import + Taxes) - Export
-      const netCost = (importTariff + taxes) - exportTariff;
-      
+
+      // Universal add-ons applied to imported energy (Buy-All imports all kWh).
+      const monthKey = `2026-${String(i + 1).padStart(2, '0')}`;
+      const addOnsBefore = calcUniversalAddOns({
+        sector: industrialSector,
+        monthlyImportKWh: consumption,
+        monthKey,
+        meterPhase: 3,
+        applyTvFee: false,
+        applyGAM: false,
+        wasteClass: null,
+        applyRuralFils: true,
+        applyMeterRent: true,
+      });
+      const billBefore = applyMinimumBillJD(importTariff + addOnsBefore.totalJD, industrialSector);
+
+      // Buy-All-Sell-All: import side still consumes the full retail, then
+      // export revenue is paid separately; min-bill applies to the energy
+      // portion before export offset (export is revenue, not a discount).
+      const netCost = applyMinimumBillJD(importTariff + addOnsBefore.totalJD, industrialSector) - exportTariff;
+
       monthlyData.push({
         month,
         consumption,
         generation,
-        generation_day: 0, // Not used in Buy-All Sell-All
+        generation_day: 0,
         generation_evening: 0,
         generation_night: 0,
-        self_consumption: 0, // No self-consumption in Buy-All Sell-All
-        export: generation, // All generation is exported
-        import: consumption, // In Buy-All Sell-All, all consumption is imported
-        bill_before: importTariff, // Cost without PV system
-        bill_after: netCost, // Cost with PV system (NET tariff)
-        import_cost: importTariff,
+        self_consumption: 0,
+        export: generation,
+        import: consumption,
+        bill_before: billBefore,
+        bill_after: netCost,
+        import_cost: importTariff + addOnsBefore.totalJD,
         export_revenue: exportTariff,
-        savings: importTariff - netCost, // Savings from PV system
-        // Add industrial-specific field for period details
-        period_details: periodDetails
+        savings: billBefore - netCost,
+        period_details: periodDetails,
       });
-      
-      totalImportCost += importTariff;
+
+      totalImportCost += importTariff + addOnsBefore.totalJD;
       totalExportRevenue += exportTariff;
       totalTaxes += taxes;
       totalNetCost += netCost;
+      totalCostWithoutPV += billBefore;
     }
-    
-    // Calculate cost without PV (what user would pay without solar)
-    const totalCostWithoutPV = monthlyConsumption.reduce((sum, consumption) => {
-      const { totalImportTariff } = calculateIndustrialImportTariff(consumption, isSmallIndustrial);
-      return sum + totalImportTariff;
-    }, 0);
-    
-    // Calculate annual savings
+
+    // Annual savings = without-PV bill total minus with-PV net cost
     const annualSavings = totalCostWithoutPV - totalNetCost;
     
     const results: CalculationResults = {
@@ -364,7 +418,7 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
       annual_summary: {
         total_consumption: totalAnnualConsumption,
         pv_size: x2Approximate, // Monthly generation approximation (kWh/month)
-        inverter_size: x2Approximate / 150, // Rough inverter size estimation (kW)
+        inverter_size: inverterKWacFromMonthlyKWh(x2Approximate, 'industrial'), // EMRC 150 kWh/kWp/mo × DC:AC 1.2
         annual_generation: x2Approximate * 12,
         total_self_consumption: 0, // No self-consumption in Buy-All Sell-All
         total_export: x2Approximate * 12, // All generation is exported
@@ -421,64 +475,73 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
     // Create tariff calculator based on user configuration
     const tariffCalculator = createTariffCalculator(calculationData);
     const exportRate = calculationData.exportTariff;
-    const systemEfficiency = calculationData.efficiency / 100; // Convert percentage to decimal
-    
+    const systemEfficiency = calculationData.efficiency / 100;
+
+    // Residential sector for add-ons / min-bill dispatch.
+    const residentialSector: SectorCode = calculationData.tariffSupported
+      ? 'A1_subsidized'
+      : 'A2_unsubsidized';
+
     // Calculate monthly data
     const monthlyData = [];
-    
+
     let totalImportCost = 0;
     let totalExportRevenue = 0;
     let totalTaxes = 0;
     let totalNetCost = 0;
-    
+    let totalCostWithoutPV = 0;
+
     for (let i = 0; i < 12; i++) {
       const month = months[i];
       const consumption = monthlyConsumption[i];
-      
-      // Use X2 approximation for generation
+
       const generation = x2Approximate;
-      
-      // Calculate import tariff using TariffEngine
+
       const importTariff = tariffCalculator.calcImportCost(consumption);
-      
-      // Calculate taxes based on X2 (generation) and user's efficiency
-      const taxes = calculateTaxes(generation, systemEfficiency);
-      
-      // Calculate export tariff based on X2 (generation) and user's export rate
+      // No taxes/demand charge layer for residential.
+      const taxes = 0;
       const exportTariff = calculateExportTariff(generation, exportRate);
-      
-      // Calculate NET tariff: (Import + Taxes) - Export
-      const netCost = (importTariff + taxes) - exportTariff;
-      
+
+      // EMRC universal add-ons on imported energy.
+      const monthKey = `2026-${String(i + 1).padStart(2, '0')}`;
+      const addOnsBefore = calcUniversalAddOns({
+        sector: residentialSector,
+        monthlyImportKWh: consumption,
+        monthKey,
+        meterPhase: 1,
+        applyTvFee: true,
+        applyGAM: false,
+        wasteClass: null,
+        applyRuralFils: true,
+        applyMeterRent: true,
+      });
+      const billBefore = applyMinimumBillJD(importTariff + addOnsBefore.totalJD, residentialSector);
+      const netCost = billBefore - exportTariff;
+
       monthlyData.push({
         month,
         consumption,
         generation,
-        generation_day: 0, // Not used in Buy-All Sell-All
+        generation_day: 0,
         generation_evening: 0,
         generation_night: 0,
-        self_consumption: 0, // No self-consumption in Buy-All Sell-All
-        export: generation, // All generation is exported
-        import: consumption, // In Buy-All Sell-All, all consumption is imported
-        bill_before: importTariff, // Cost without PV system
-        bill_after: netCost, // Cost with PV system (NET tariff)
-        import_cost: importTariff,
+        self_consumption: 0,
+        export: generation,
+        import: consumption,
+        bill_before: billBefore,
+        bill_after: netCost,
+        import_cost: importTariff + addOnsBefore.totalJD,
         export_revenue: exportTariff,
-        savings: importTariff - netCost // Savings from PV system
+        savings: billBefore - netCost,
       });
-      
-      totalImportCost += importTariff;
+
+      totalImportCost += importTariff + addOnsBefore.totalJD;
       totalExportRevenue += exportTariff;
       totalTaxes += taxes;
       totalNetCost += netCost;
+      totalCostWithoutPV += billBefore;
     }
-    
-    // Calculate cost without PV (what user would pay without solar)
-    const totalCostWithoutPV = monthlyConsumption.reduce((sum, consumption) => {
-      return sum + tariffCalculator.calcImportCost(consumption);
-    }, 0);
-    
-    // Calculate annual savings
+
     const annualSavings = totalCostWithoutPV - totalNetCost;
     
     const results: CalculationResults = {
@@ -486,7 +549,7 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
       annual_summary: {
         total_consumption: totalAnnualConsumption,
         pv_size: x2Approximate, // Monthly generation approximation (kWh/month)
-        inverter_size: x2Approximate / 150, // Rough inverter size estimation (kW) - assuming 150 kWh/month per kW
+        inverter_size: inverterKWacFromMonthlyKWh(x2Approximate, 'residential'), // EMRC 150 kWh/kWp/mo × DC:AC 1.5
         annual_generation: x2Approximate * 12,
         total_self_consumption: 0, // No self-consumption in Buy-All Sell-All
         total_export: x2Approximate * 12, // All generation is exported
@@ -553,12 +616,21 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
           pv_consume_period4: calculationData.pvConsumePeriod4,  // Half Peak (23-5) - k4
           
           // Industrial tariff configuration (from state)
-          industrial_tariffs: calculationData.industrialTariffs
+          industrial_tariffs: calculationData.industrialTariffs,
+          // Jordan EMRC 2025 sector dispatch + Bylaw 58/2024 mechanism
+          sector: defaultSectorFor('Industrial'),
+          net_billing_mechanism: mechanismFor(calculationData.gridConnection),
+          // PF defaults to 0.90 → no penalty (NEPCO §I.1.d threshold = 0.88).
+          power_factor: 0.9,
         };
 
         console.log('🏭 INDUSTRIAL CALCULATION: Sent native 4-period data (no compression)');
       } else {
-        // Default Residential + Net Billing parameters
+        // Default Residential + Net Billing parameters.
+        // Sector is A1_subsidized when tariffSupported, else A2_unsubsidized.
+        const residentialSector: SectorCode = calculationData.tariffSupported
+          ? 'A1_subsidized'
+          : 'A2_unsubsidized';
         requestBody = {
           consumption: calculationData.consumption,
           efficiency: calculationData.efficiency,
@@ -572,12 +644,16 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
           sun_low_factors: calculationData.sunLowFactors,
           pv_consume_day: calculationData.pvConsumeDay,
           pv_consume_evening: calculationData.pvConsumeEvening,
-          pv_consume_night: calculationData.pvConsumeNight
+          pv_consume_night: calculationData.pvConsumeNight,
+          sector: residentialSector,
+          net_billing_mechanism: mechanismFor(calculationData.gridConnection),
+          power_factor: 0.9,
         };
-        
+
         console.log('Calculating with RESIDENTIAL parameters:', {
           customerType: calculationData.customerType,
-          gridConnection: calculationData.gridConnection
+          gridConnection: calculationData.gridConnection,
+          sector: residentialSector,
         });
       }
       
