@@ -18,16 +18,20 @@ import {
   calcUniversalAddOns,
   applyMinimumBillJD,
   defaultSectorFor,
+  SPECIFIC_YIELD_KWH_PER_KWP_MONTH,
+  inverterKWacFromMonthlyKWh,
   type SectorCode,
   type NetBillingMechanism,
 } from '@shared/jordanTariffs';
 
 /**
- * Map the project's grid-connection labels onto the Bylaw 58/2024 enumeration.
- *   Net billing       → Mechanism 2 (Net Value On-site)
- *   wheeling          → Mechanism 1 (Net Value Off-site)
- *   Zero export       → Mechanism 3 (Zero Export, battery allowed)
- *   Buy all sell all  → Mechanism 4 (separate meter; no grid fee)
+ * Map the project's grid-connection labels onto the Bylaw 58/2024 + legacy
+ * enumeration of five operative PV grid-connection mechanisms.
+ *   Net billing         → Mechanism 2 (Net Value On-site)
+ *   wheeling            → Mechanism 1 (Net Value Off-site)
+ *   Zero export         → Mechanism 3 (Zero Export, battery allowed)
+ *   Buy all sell all    → Mechanism 4 (separate meter; zero grid fee)
+ *   Legacy net metering → Mechanism 5 (pre-1/6/2024 grandfathered, 1:1 kWh)
  */
 function mechanismFor(gridConnection: GridConnection): NetBillingMechanism {
   switch (gridConnection) {
@@ -37,6 +41,8 @@ function mechanismFor(gridConnection: GridConnection): NetBillingMechanism {
       return 'M3_zero_export';
     case 'Buy all sell all':
       return 'M4_buy_all_sell_all';
+    case 'Legacy net metering':
+      return 'M5_legacy_net_metering';
     case 'Net billing':
     default:
       return 'M2_net_value_onsite';
@@ -242,10 +248,11 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
   }, []);
 
   const calculateTaxes = useCallback((generation: number, efficiency: number): number => {
-    // Formula: TX = (X2 / (130 * efficiency)) * 1
-    if (generation > 0 && efficiency > 0) {
-      return (generation / (130 * efficiency)) * 1;
-    }
+    // Legacy "TX" formula was (X2 / (130 * efficiency)) * 1. EMRC abolished
+    // demand charges in 2024 and the PV round adopted the standard yield of
+    // 150 kWh/kWp/month (1,800 kWh/kWp/yr). No tax/demand layer applies to
+    // PV generation under any Bylaw 58/2024 mechanism — return 0.
+    void generation; void efficiency;
     return 0;
   }, []);
 
@@ -411,7 +418,7 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
       annual_summary: {
         total_consumption: totalAnnualConsumption,
         pv_size: x2Approximate, // Monthly generation approximation (kWh/month)
-        inverter_size: x2Approximate / 150, // Rough inverter size estimation (kW)
+        inverter_size: inverterKWacFromMonthlyKWh(x2Approximate, 'industrial'), // EMRC 150 kWh/kWp/mo × DC:AC 1.2
         annual_generation: x2Approximate * 12,
         total_self_consumption: 0, // No self-consumption in Buy-All Sell-All
         total_export: x2Approximate * 12, // All generation is exported
@@ -542,7 +549,7 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
       annual_summary: {
         total_consumption: totalAnnualConsumption,
         pv_size: x2Approximate, // Monthly generation approximation (kWh/month)
-        inverter_size: x2Approximate / 150, // Rough inverter size estimation (kW) - assuming 150 kWh/month per kW
+        inverter_size: inverterKWacFromMonthlyKWh(x2Approximate, 'residential'), // EMRC 150 kWh/kWp/mo × DC:AC 1.5
         annual_generation: x2Approximate * 12,
         total_self_consumption: 0, // No self-consumption in Buy-All Sell-All
         total_export: x2Approximate * 12, // All generation is exported

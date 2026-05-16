@@ -51,13 +51,20 @@ three high-level stages:
 | Quantity                          | Default value            | Source                          |
 | --------------------------------- | ------------------------ | ------------------------------- |
 | System (DC→AC) efficiency         | 95 %                     | `routes.ts`, `schema.ts`        |
-| Specific yield (sizing constant)  | 130 kWh / kW / month     | `routes.ts` (PV round upgrades to 1,800 kWh/kWp/yr ≈ 150 kWh/kWp/mo) |
+| Specific yield (EMRC standard)    | 1,800 kWh/kWp·year = **150 kWh/kWp/month** | EMRC standard, EcoMENA (Zawaydeh, 2025) |
+| DC:AC ratio — residential / single-phase | **1.5**           | Bylaw 58/2024 annex             |
+| DC:AC ratio — all other sectors   | **1.2**                  | Bylaw 58/2024 annex             |
+| Residential single-phase inverter cap | **3.6 kWac (≈ 5.4 kWp DC)** | EMRC Chairman statement, 19 Aug 2024 |
+| Residential three-phase inverter cap | **10 kWac (≈ 15 kWp DC)** | EMRC Chairman statement, 19 Aug 2024 |
+| Bylaw 58/2024 grandfathering cutoff | **1 June 2024** (approval date, not commissioning) | Law 12/2024 effective date |
 | Annual module degradation         | 0.5 % / year             | `routes.ts`                     |
 | Discount rate (NPV)               | 5 % / year               | `routes.ts`                     |
 | Project lifetime                  | 25 years                 | `routes.ts`                     |
 | Residential NB export tariff      | 0.050 JD/kWh             | Bylaw 58/2024; EMRC chair Sa'aydeh 4/9/2024 |
 | Non-residential NB export tariff  | 0.040 JD/kWh             | EcoMENA / Buy-All baseline      |
 | Residential grid-service fee      | 1.000 JD/kWac/month (new) | Bylaw 58/2024 §V (post-1/6/2024); 2.000 legacy |
+| Legacy NEM (M5) export haircut    | 0.80 (default)           | MDPI Energies 2025 — verify against legacy Instructions PDF |
+| Annual credit reset policy        | `forfeit_year_end` (default) | Legacy DISCO practice — Bylaw 58 M2 rollover/cash-out not published |
 | PF penalty threshold              | 0.88                     | NEPCO §I.1.d                    |
 | Min bill (residential)            | 1.750 JD/month           | NEPCO                           |
 | Min bill (non-residential)        | 2.000 JD/month           | EMRC §VII                       |
@@ -84,34 +91,65 @@ $$
 C_{\text{annual}} \;=\; \sum_{m=1}^{12} C_m .
 $$
 
-The target monthly PV generation `X2` is
+The target monthly PV generation `X2` is the prosumer's average monthly
+consumption multiplied by the **mechanism's generation-cap fraction** (see
+§4.10 below):
 
 $$
-X_2 \;=\; \frac{C_{\text{annual}}}{12} \quad \text{(Residential)}
+X_2 \;=\; \alpha_{\text{mech},\text{class}} \cdot \frac{C_{\text{annual}}}{12}
 $$
 
-$$
-X_2 \;=\; \frac{1}{2} \cdot \frac{C_{\text{annual}}}{12} \quad \text{(Industrial)}
-$$
+| Mechanism                             | Residential | Non-residential |
+| ------------------------------------- | ----------- | --------------- |
+| M1 Net Value Off-site (Wheeling)      | n/a (excluded) | 50 % |
+| M2 Net Value On-site (Net Billing)    | **100 %**   | **50 %** |
+| M3 Zero Export                        | 100 %       | 100 %           |
+| M4 Buy-All / Sell-All                 | 100 %       | 100 %           |
+| M5 Legacy Net Metering                | 100 %       | 100 %           |
 
-The factor of ½ for Industrial customers reflects that industrial sites are
-typically only partially offset by rooftop PV rather than sized to net
-zero. (Project convention — to be revisited in the PV round alongside the
-3.6 / 10 kWac cap rules in Bylaw 58/2024.)
+The old project convention of ½ for "Industrial" customers is replaced by
+this matrix — M2 non-residential naturally lands at 50 %.
 
 ### 2.2 Inverter sizing
 
-The inverter nameplate rating (kWac) is estimated from the target monthly
-yield using a specific-yield constant of 130 kWh / kW / month, derated by
-the 95 % system efficiency:
+The inverter nameplate rating (kWac) is derived from the target monthly
+yield using the EMRC standard specific yield (1,800 kWh/kWp·year =
+150 kWh/kWp/month) and the sector DC:AC ratio:
 
 $$
-P_{\text{inv}} \;=\; \frac{X_2}{130 \times 0.95}\, .
+\text{kWp}_{\text{DC}} \;=\; \frac{X_2}{150}, \qquad
+P_{\text{inv}} \;=\; \frac{\text{kWp}_{\text{DC}}}{r_{\text{DC:AC}}} \cdot \frac{1}{\eta}
 $$
 
-The PV round will replace this with the EcoMENA-recommended 1,800 kWh/kWp/year
-≈ 150 kWh/kWp/month, plus DC:AC ratios (1.5 residential, 1.2 commercial)
-and the Bylaw 58/2024 size caps (3.6 kWac 1-ph / 10 kWac 3-ph residential).
+with `r_DC:AC = 1.5` residential, `r_DC:AC = 1.2` other sectors, and
+`η = 0.95` default system efficiency.
+
+### 2.3 Residential inverter cap (Bylaw 58/2024)
+
+For residential prosumers, the inverter rating is then capped at:
+
+- **3.6 kWac** for single-phase meters (≈ 5.4 kWp DC at 1.5 ratio)
+- **10 kWac** for three-phase meters (≈ 15 kWp DC at 1.5 ratio)
+
+If the cap binds, the effective `X2` is re-derived from the capped inverter:
+
+$$
+X_2 \;=\; P_{\text{inv,cap}} \cdot r_{\text{DC:AC}} \cdot 150 \cdot \eta .
+$$
+
+Non-residential sectors have no hard kWac cap; sizing is constrained by
+the grid-impact study at the off-take / generation sites (the 2019
+1 MW project ceiling was lifted in September 2024).
+
+### 2.4 Subsidy-loss trigger
+
+The 3.6 kWac single-phase threshold ALSO serves as the residential
+**subsidy-loss trigger**: a single-phase prosumer with inverter > 3.6 kWac
+is moved from the subsidized residential tariff (A1: 50/100/200 fils) onto
+the unsubsidized one (A2: 120/150 fils), regardless of mechanism — the
+trigger sits on the meter/inverter side of the tariff rules, not on the
+PV-mechanism side. The three-phase subsidy-loss trigger is not explicitly
+published; we use the 10 kWac inverter cap as the conservative threshold.
 
 ---
 
@@ -298,9 +336,25 @@ else:                               # deficit
 ```
 
 The customer is never billed below zero in a given month; surpluses persist
-as credits available against subsequent months. (The PV round will add the
-annual balance reset — credits do not roll over indefinitely; see Alrbai et
-al., 2025.)
+as credits available against subsequent months.
+
+**Annual reset (Bylaw 58/2024 — open question).** Whether the new monetary
+Net-Billing regime preserves the legacy DISCO practice of year-end
+forfeiture OR introduces cash settlement is the single highest-stakes open
+question for billing-engine math. The calculator defaults to
+`forfeit_year_end` (legacy practice). At the end of December the residual
+`S` is zeroed and added to `total_cost_after` as forfeited credit. Two
+alternative policies are wired in for sensitivity analysis:
+
+| `annual_reset_policy`     | Behaviour at Dec 31                                  |
+| ------------------------- | ---------------------------------------------------- |
+| `forfeit_year_end` (default) | `S ← 0`; forfeited JD adds to cost                |
+| `cash_out`                | DISCO refunds `S` in JD; `S ← 0`                     |
+| `rollover_indefinite`     | `S` carries forward into Year 2 (matches old behaviour) |
+
+For **M3 Zero Export** and the JD side of **M5 Legacy NEM**, export
+revenue is forced to 0 (M3: accidental export uncompensated; M5: settled
+as kWh credit, not JD — see §4.13).
 
 ### 4.7 Universal regulated add-ons (every bill)
 
@@ -372,26 +426,83 @@ $$
 F_{\text{grid}} = P_{\text{inv}} \cdot r_{\text{sector}} \cdot 12 .
 $$
 
-### 4.11 Four prosumer mechanisms (Bylaw 58/2024)
+### 4.11 Five prosumer mechanisms (Bylaw 58/2024 + legacy)
 
-| Mechanism | Mode                         | Eligibility                       | Cap | Grid fee |
-| --------- | ---------------------------- | --------------------------------- | --- | -------- |
-| M1        | Net Value Off-site (wheeling) | Small/med industrial, hotels, agri | 50 % of last year | per sector |
-| M2        | Net Value On-site (Net Billing) | All sectors incl. residential   | 100 % of last year | per sector |
-| M3        | Zero Export                   | All except banks / normal / extractive (battery allowed) | n/a | per sector |
-| M4        | Buy-All / Sell-All            | All sectors; separate meter        | n/a | 0 (exempt) |
+| # | Mode                         | Eligibility                                  | Generation cap (% of last 12 months) | Grid fee |
+| - | ---------------------------- | -------------------------------------------- | ------------------------------------ | -------- |
+| M1 | Net Value Off-site (wheeling) | Small/med industrial, hotels, agriculture only (residential excluded — LV only) | 50 % | per sector |
+| M2 | Net Value On-site (Net Billing) | EMRC named: residential, small/med industrial, hotels, agriculture. Others **unclear** — `eligibility_status` returns `unclear` | residential 100 % / non-res 50 % | per sector |
+| M3 | Zero Export                   | All except banks / "ordinary" / extractive (export-limiter required, battery allowed) | 100 % | per sector (M2 schedule as upper-bound default; EMRC says "can reach zero" for some) |
+| M4 | Buy-All / Sell-All            | All sectors universally (sole option for banks / extractive) | 100 % | 0 (universal exempt; sub-300 kWh/mo additionally exempt) |
+| M5 | Legacy Net Metering           | Systems with **EMRC/DISCO approval before 1 June 2024**; original sector | per original contract (default 100 %) | 0 (not subject to new Bylaw 58 fee) |
 
-The project's `gridConnection` enum maps onto these mechanisms in
-`CalculatorLogic.tsx::mechanismFor`.
+The project's `gridConnection` enum maps onto these five mechanisms in
+`CalculatorLogic.tsx::mechanismFor`:
 
-### 4.12 Subsidy-loss trigger (residential prosumers)
+| `gridConnection`     | Mechanism                  |
+| -------------------- | -------------------------- |
+| `Net billing`        | M2 Net Value On-site       |
+| `wheeling`           | M1 Net Value Off-site      |
+| `Zero export`        | M3 Zero Export             |
+| `Buy all sell all`   | M4 Buy-All / Sell-All      |
+| `Legacy net metering` | M5 Legacy NEM             |
+
+### 4.12 Sector × mechanism eligibility matrix
+
+`isEligibleForMechanism(sector, mechanism)` returns one of:
+
+- `eligible` — explicitly named in the Bylaw 58/2024 engine spec
+- `ineligible` — explicitly excluded (banks/extractive from M1/M3; residential from M1; ordinary/extractive/banks from M3)
+- `unclear` — not named in EMRC's August 2024 press list but not explicitly excluded; **the calc surfaces this as a warning without blocking** — see Part 3 of the Bylaw 58/2024 engine spec for the full 26-sector matrix
+
+### 4.13 Mechanism 5 — Legacy Net Metering (kWh-for-kWh)
+
+Pre-1/6/2024 grandfathered systems are settled in kWh, not JD:
+
+```
+creditedExportsKWh = exportsKWh × exportHaircut         # default 0.80
+netKWh             = importsKWh − creditedExportsKWh − priorCarryKWh
+if netKWh ≥ 0:
+    invoiceJD = netKWh × (retailTariff + fuelClause/1000)
+    carryKWh  = 0
+else:
+    invoiceJD = 0
+    carryKWh  = −netKWh
+```
+
+Year-end carry is **forfeited** (DISCO does not cash-out). The 0.80
+default haircut comes from MDPI Energies 2025 — verify against the legacy
+Instructions PDF on emrc.gov.jo. Implementation:
+`legacyNetMeteringMonthly()` in `shared/jordanTariffs.ts`.
+
+### 4.14 Wheeling-specific TOU windows (M1)
+
+Wheeling under M1 uses **different TOU windows** than the standard EMRC
+schedule used for the rest of the tariff system:
+
+| Period        | Standard EMRC          | Wheeling (M1)     |
+| ------------- | ---------------------- | ----------------- |
+| Off-peak      | 05:00 – 14:00 (9 h)    | **05:00 – 17:00 (12 h)** |
+| Partial-peak  | 14:00 – 17:00 + 23:00 – 05:00 (9 h) | **23:00 – 05:00 (6 h)** |
+| Peak          | 17:00 – 23:00 (6 h)    | 17:00 – 23:00 (6 h) |
+
+The 14:00–17:00 mid-afternoon hours are part of wheeling **off-peak**, not
+partial. The calculator's 4-bucket→3-bucket mapping switches between
+`mapFourBucketToStandardTOU` and `mapFourBucketToWheelingTOU` based on
+the resolved mechanism.
+
+### 4.15 Subsidy-loss trigger (residential prosumers)
 
 Subsidy (A1) is lost for new installations exceeding:
 
 - Single-phase inverter > **3.6 kWac** (~16 A × 230 V in legacy text)
 - Three-phase parallel > **10 kWac**
 
-See `losesResidentialSubsidy()` in `shared/jordanTariffs.ts`.
+This rule has been in effect since the 1 April 2022 tariff redesign and
+survives unchanged under Bylaw 58/2024 — the trigger sits on the
+meter/inverter side of the tariff rules, not on the PV-mechanism side.
+See `losesResidentialSubsidy()` in `shared/jordanTariffs.ts`. The annual
+summary exposes a `loses_residential_subsidy` boolean.
 
 ---
 
@@ -473,22 +584,45 @@ benchmark.
 
 - **Currency:** Sector rates are stored in fils/kWh and divided by 1000 by
   `priceImportJD` / `priceTOU3JD` / `priceTieredJD` / `priceFlatJD`.
-- **Specific yield (130 kWh/kW/month):** an assumption tuned to a
-  conservative Jordan-class solar resource. The PV round will switch to
-  150 kWh/kWp/month (1,800 kWh/kWp/year per EcoMENA).
+- **Specific yield (150 kWh/kWp/month = 1,800 kWh/kWp/year):** EMRC
+  standard cited in EcoMENA (Zawaydeh, 2025).
+- **DC:AC ratio:** 1.5 residential / 1.2 all other sectors per Bylaw
+  58/2024 annex. Used by `kWpFromKWac` / `inverterKWacFromMonthlyKWh`.
+- **Residential inverter cap:** 3.6 kWac single-phase / 10 kWac three-phase.
+  Non-residential has no hard kWac cap — sizing constrained by the
+  grid-impact study at off-take and generation sites.
 - **Degradation curve:** geometric decay at 0.5 %/year; no end-of-life cliff.
 - **No inflation / escalation:** tariffs are held flat across the 25-year
   horizon. The discount rate alone discounts future savings.
-- **The factor `½` on Industrial sizing** is a project convention, not a
-  physical limit; remove it to size to full net-zero.
-- **Fuel clause** is monthly and applies to ALL sectors. Confirmed values
-  for 2026 (Jan–May) are 0 fils/kWh; populate
-  `FUEL_CLAUSE_FILS_BY_MONTH` from EMRC's monthly bulletin for new months.
+- **Fuel clause** is monthly, sector-wide, applies to imported kWh only
+  (never to exported kWh under any mechanism). Confirmed values for 2026
+  (Jan–May) are 0 fils/kWh per EMRC monthly bulletins; populate
+  `FUEL_CLAUSE_FILS_BY_MONTH` for new months from `emrc.gov.jo`.
 - **No seasonal TOU shift** exists; EMRC Council retains a discretionary
   hook under §XII.f that has never been invoked.
 - **Phase 2 (1 Jan 2025)** made banks, private hospitals, water pumping,
   Government / Armed Forces, and 4★+ hotels into mandatory TOU. The
   former flat options (0.140 / 0.146 / 0.095) are obsolete.
+- **Bylaw 58/2024 grandfathering hinge** is the EMRC/DISCO approval date,
+  not the physical commissioning date. Cutover: 1 June 2024.
+- **Annual reset / cash-out** is the single highest-stakes open question
+  for M2 economics; default = `forfeit_year_end` per legacy DISCO
+  practice. Confirm with EMRC before launch.
+- **🔍 Items requiring EMRC primary confirmation before billing-math goes
+  live** (per the Bylaw 58/2024 engine spec §"Go / No-Go"):
+    1. Wheeling charge per kWh by voltage class and TOU period (M1)
+    2. EMRC Reference Tariff for M1/M2 exports by TOU period
+    3. Per-sector grid-service-fee schedule under M2/M3 (only residential
+       1 JD, small/medium industrial & agri 0 JD, and commercial ~13 JD
+       are publicly cited)
+    4. Credit rollover & annual reset / cash-out under M1/M2
+    5. Whether M5 legacy systems are exempt from new grid-service fee
+    6. Explicit eligibility under M2 for commercial / commercial-temporary
+       / large industrial / telecom / hospital / government / EV-public /
+       broadcasting / street-lighting / ports / water pumping
+    7. Penalty schedule for unauthorised export under M3, oversizing,
+       illegal wheeling, and inverter-cap violations
+    8. Status of 2025 battery-storage amendments to Bylaw 58
 - **B3 Bank**, **E1 Private Hospital partial/off-peak**, **D1 Hotel TOU**,
   and the **~13 JD/kWac commercial grid-fee** numbers are user-editable
   defaults — not confirmed in any retrieved primary source. Validate

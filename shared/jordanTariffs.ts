@@ -426,9 +426,13 @@ export const METER_RENT_JD = { singlePhase: 0.2, threePhase: 0.5 } as const;
 export const MIN_BILL_JD = { residential: 1.75, nonResidential: 2.0 } as const;
 
 /**
- * Monthly fuel-clause (fils/kWh). Confirmed values for 2026 so far: all zero.
- * Future months default to 0 until EMRC publishes a non-zero value.
- * Keyed by ISO YYYY-MM.
+ * Monthly fuel-clause (fils/kWh). Sector-wide, set monthly by EMRC. Confirmed
+ * values for 2026 so far are all zero (Jan through May per EMRC monthly
+ * bulletins; April–May 2026 reconfirmed in the May 2026 announcement).
+ *
+ * Fuel clause applies to **imported kWh only**, never to exported kWh under
+ * any prosumer mechanism. Future months default to 0 until EMRC publishes a
+ * non-zero value. Keyed by ISO YYYY-MM.
  */
 export const FUEL_CLAUSE_FILS_BY_MONTH: Record<string, number> = {
   '2026-01': 0,
@@ -611,12 +615,20 @@ export function priceImportJD(input: PriceImportInput): number {
 // Net Billing — Bylaw 58/2024
 // ---------------------------------------------------------------------------
 
-/** The four prosumer mechanisms defined by Bylaw 58/2024. */
+/**
+ * The five prosumer mechanisms currently operative in Jordan.
+ *   M1–M4 are defined by Bylaw 58/2024 (Official Gazette 19 Aug 2024).
+ *   M5 is the pre-existing kWh-for-kWh net-metering regime issued under
+ *   EMRC Instructions under Article 10/B of REEEL No. 13/2012, preserved
+ *   by Article 10-bis of Law 12/2024 for systems with formal connection
+ *   approval before 1 June 2024.
+ */
 export type NetBillingMechanism =
   | 'M1_net_value_offsite' // wheeling: small/med industrial, hotels, agri; 50% cap
-  | 'M2_net_value_onsite' // net billing (default for residential); 100% cap
-  | 'M3_zero_export' // all except banks/normal/extractive; battery allowed
-  | 'M4_buy_all_sell_all'; // separate meter; no grid fee
+  | 'M2_net_value_onsite' // net billing (default for residential)
+  | 'M3_zero_export' // all except banks/normal/extractive; export-limiter required
+  | 'M4_buy_all_sell_all' // separate meter; zero grid fee universal
+  | 'M5_legacy_net_metering'; // grandfathered pre-1/6/2024; true 1:1 kWh netting
 
 export const NB_RESIDENTIAL_EXPORT_RATE_JD = 0.05; // EMRC chair Sa'aydeh 4/9/2024
 export const NB_NONRES_EXPORT_RATE_JD = 0.04; // Buy-All baseline; sector-specific in NB Mechanism 2
@@ -635,6 +647,11 @@ export interface GridFeeInput {
 export function gridServiceFeeJD(input: GridFeeInput): number {
   // Buy-All/Sell-All is exempt regardless of sector.
   if (input.mechanism === 'M4_buy_all_sell_all') return 0;
+  // Legacy net-metering (M5) is NOT subject to the new Bylaw 58 grid
+  // service fee per statutory reading of Article 10-bis (Law 12/2024).
+  // EMRC has not issued an explicit FAQ confirming this — verify before
+  // launch if any legacy customer disputes a fee charge.
+  if (input.mechanism === 'M5_legacy_net_metering') return 0;
   // Welfare beneficiaries always exempt.
   if (input.isWelfareBeneficiary) return 0;
 
@@ -694,6 +711,11 @@ export function netBillingExportRateJD(sector: SectorCode): number {
 // ---------------------------------------------------------------------------
 // Subsidy-loss trigger for prosumers (EMRC tariff PDF §6.‫)ج‬
 // ---------------------------------------------------------------------------
+// The 3.6 kWac single-phase threshold applies on single-phase meters only.
+// Three-phase residential metering follows a 10 kWac inverter cap but the
+// subsidy-loss trigger on 3-phase is not explicitly published — we use the
+// inverter cap as the conservative trigger.
+// ---------------------------------------------------------------------------
 
 export const SUBSIDY_LOSS_TRIGGER_KW = {
   singlePhaseInverter: 3.6, // formerly described as "16 A × 230 V" — equivalent
@@ -706,6 +728,335 @@ export function losesResidentialSubsidy(
 ): boolean {
   if (phase === 1) return inverterKWac > SUBSIDY_LOSS_TRIGGER_KW.singlePhaseInverter;
   return inverterKWac > SUBSIDY_LOSS_TRIGGER_KW.threePhaseParallel;
+}
+
+// ---------------------------------------------------------------------------
+// PV sizing constants (Bylaw 58/2024 common framework)
+// ---------------------------------------------------------------------------
+
+/** EMRC standard specific yield (kWh per kWp DC per year). */
+export const SPECIFIC_YIELD_KWH_PER_KWP_YEAR = 1800;
+/** Monthly equivalent: 1,800 / 12 = 150 kWh/kWp/month. */
+export const SPECIFIC_YIELD_KWH_PER_KWP_MONTH = SPECIFIC_YIELD_KWH_PER_KWP_YEAR / 12;
+
+/**
+ * DC : AC ratio caps from the Bylaw 58/2024 annex.
+ *   Residential single-phase: 1.5  → a 3.6 kWac inverter can carry 5.4 kWp DC.
+ *   All other sectors:        1.2
+ */
+export const DC_AC_RATIO = {
+  residential: 1.5,
+  nonResidential: 1.2,
+} as const;
+
+/**
+ * Maximum inverter nameplate (kWac) for residential prosumers.
+ *   Single-phase: 3.6 kWac (≈ 5.4 kWp DC at 1.5 ratio)
+ *   Three-phase:  10  kWac (≈ 15  kWp DC at 1.5 ratio)
+ * Non-residential has no hard kWac cap — sizing is constrained by the
+ * grid-impact study at the off-take and generation sites (the 2019
+ * 1 MW project ceiling was lifted in September 2024).
+ */
+export const RESIDENTIAL_INVERTER_CAP_KWAC = {
+  singlePhase: 3.6,
+  threePhase: 10,
+} as const;
+
+/** kWp_DC from kWac for a given customer class. */
+export function kWpFromKWac(kWac: number, sectorClass: CustomerClass): number {
+  const ratio = sectorClass === 'residential' ? DC_AC_RATIO.residential : DC_AC_RATIO.nonResidential;
+  return kWac * ratio;
+}
+
+/** kWac from kWp_DC (inverse of kWpFromKWac). */
+export function kWacFromKWp(kWp: number, sectorClass: CustomerClass): number {
+  const ratio = sectorClass === 'residential' ? DC_AC_RATIO.residential : DC_AC_RATIO.nonResidential;
+  return kWp / ratio;
+}
+
+/**
+ * Inverter sizing from a target monthly PV generation (kWh). Uses the EMRC
+ * specific yield (150 kWh/kWp/month) and the sector's DC:AC ratio.
+ *
+ *     kWp_DC  = monthlyKWh / 150
+ *     kWac    = kWp_DC / DC:AC
+ */
+export function inverterKWacFromMonthlyKWh(
+  monthlyKWh: number,
+  sectorClass: CustomerClass,
+): number {
+  const kWp = monthlyKWh / SPECIFIC_YIELD_KWH_PER_KWP_MONTH;
+  return kWacFromKWp(kWp, sectorClass);
+}
+
+/**
+ * Apply the residential inverter cap. Returns the capped kWac and a flag
+ * indicating whether the cap was binding. Non-residential pass-through.
+ */
+export function applyResidentialInverterCap(
+  kWac: number,
+  phase: 1 | 3,
+  sectorClass: CustomerClass,
+): { kWac: number; capped: boolean; cap: number | null } {
+  if (sectorClass !== 'residential') return { kWac, capped: false, cap: null };
+  const cap =
+    phase === 1
+      ? RESIDENTIAL_INVERTER_CAP_KWAC.singlePhase
+      : RESIDENTIAL_INVERTER_CAP_KWAC.threePhase;
+  if (kWac > cap) return { kWac: cap, capped: true, cap };
+  return { kWac, capped: false, cap };
+}
+
+// ---------------------------------------------------------------------------
+// System-size caps per mechanism (% of last 12 months' consumption)
+// ---------------------------------------------------------------------------
+
+/**
+ * Cap on annual PV generation as a fraction of the prosumer's last 12 months
+ * of consumption.
+ *   M1 wheeling                : 50 %  (all eligible sectors)
+ *   M2 net billing residential : 100 %
+ *   M2 net billing non-res     : 50 %
+ *   M3 zero export             : 100 % (any sector)
+ *   M4 buy-all/sell-all        : 100 %
+ *   M5 legacy                  : ≤ prosumer's annual consumption (per original
+ *                                contract; pre-2024 default = 100 %)
+ */
+export function mechanismGenerationCapFraction(
+  mechanism: NetBillingMechanism,
+  sectorClass: CustomerClass,
+): number {
+  switch (mechanism) {
+    case 'M1_net_value_offsite':
+      return 0.5;
+    case 'M2_net_value_onsite':
+      return sectorClass === 'residential' ? 1.0 : 0.5;
+    case 'M3_zero_export':
+      return 1.0;
+    case 'M4_buy_all_sell_all':
+      return 1.0;
+    case 'M5_legacy_net_metering':
+      return 1.0;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sector × mechanism eligibility matrix
+// ---------------------------------------------------------------------------
+
+export type EligibilityStatus = 'eligible' | 'ineligible' | 'unclear';
+
+/**
+ * Eligibility lookup for sector × mechanism. Values map the Part-3 matrix
+ * in the Bylaw 58/2024 engine specification. "unclear" cells are flagged in
+ * the spec as requiring EMRC confirmation; they should NOT be auto-blocked
+ * — surface as warnings instead.
+ */
+export function isEligibleForMechanism(
+  sector: SectorCode,
+  mechanism: NetBillingMechanism,
+): EligibilityStatus {
+  // M5 legacy is conditional on pre-1/6/2024 approval — surface as
+  // "unclear" so the caller must explicitly confirm the approval date.
+  if (mechanism === 'M5_legacy_net_metering') return 'unclear';
+  // M4 Buy-All/Sell-All is the universal fallback.
+  if (mechanism === 'M4_buy_all_sell_all') return 'eligible';
+
+  const klass = SECTOR_TO_CLASS[sector];
+
+  if (mechanism === 'M1_net_value_offsite') {
+    // Only small/med industrial, hotels, agriculture are explicitly named.
+    if (sector === 'C1_small_industrial' || sector === 'C2_medium_industrial') return 'eligible';
+    if (klass === 'hotel') return 'eligible';
+    if (klass === 'agriculture') return 'eligible';
+    if (klass === 'residential') return 'ineligible';
+    // Large industrial in practice migrates to BOO/PPA track outside the
+    // four-mechanism framework.
+    if (sector === 'C3_large_industrial') return 'unclear';
+    return 'unclear';
+  }
+
+  if (mechanism === 'M2_net_value_onsite') {
+    // EMRC press release explicitly named five sectors: small_industrial,
+    // medium_industrial, hotel, agriculture, residential.
+    if (klass === 'residential') return 'eligible';
+    if (sector === 'C1_small_industrial' || sector === 'C2_medium_industrial') return 'eligible';
+    if (klass === 'hotel') return 'eligible';
+    if (klass === 'agriculture') return 'eligible';
+    // All others may be eligible via implicit commercial/government band
+    // (EcoMENA analysis implies commercial is in citing ~13 JD/kWac fee);
+    // EMRC press list is narrower.
+    if (sector === 'C4_extractive' || sector === 'B3_banks') return 'ineligible';
+    return 'unclear';
+  }
+
+  if (mechanism === 'M3_zero_export') {
+    // All except banks/normal/extractive.
+    if (sector === 'B3_banks' || sector === 'C4_extractive') return 'ineligible';
+    // "Ordinary" tariff (G1 standard 7-tier) is also explicitly excluded
+    // in the spec; treat as ineligible.
+    if (sector === 'G1_standard_7tier') return 'ineligible';
+    return 'eligible';
+  }
+
+  return 'unclear';
+}
+
+// ---------------------------------------------------------------------------
+// Mechanism 1 (wheeling) TOU windows
+// ---------------------------------------------------------------------------
+// Wheeling uses different TOU windows than the standard EMRC schedule used
+// for the rest of the tariff system. The off-peak block absorbs the
+// 14:00–17:00 mid-afternoon hours.
+// ---------------------------------------------------------------------------
+
+export const WHEELING_TOU_WINDOWS = {
+  offPeak: { startHour: 5, endHour: 17, durationHours: 12 },  // 05–17
+  peak: { startHour: 17, endHour: 23, durationHours: 6 },      // 17–23
+  partial: { startHour: 23, endHour: 5, durationHours: 6 },    // 23–05
+} as const;
+
+/**
+ * Map the project's four monthly factor buckets (y1=05–14, y2=14–17,
+ * y3=17–23, y4=23–05) onto wheeling's three TOU buckets. The 14–17 hours
+ * (y2) are part of wheeling off-peak — NOT partial — under M1.
+ */
+export function mapFourBucketToWheelingTOU(
+  y1: number, y2: number, y3: number, y4: number,
+): { offPeak: number; partial: number; peak: number } {
+  return { offPeak: y1 + y2, partial: y4, peak: y3 };
+}
+
+/**
+ * Map the project's four monthly factor buckets onto the standard EMRC
+ * 3-period TOU (used by C2/C3/C4 industrial, banks, hotels, hospitals,
+ * water pumping, govt, EV, etc).
+ */
+export function mapFourBucketToStandardTOU(
+  y1: number, y2: number, y3: number, y4: number,
+): { offPeak: number; partial: number; peak: number } {
+  return { offPeak: y1, partial: y2 + y4, peak: y3 };
+}
+
+// ---------------------------------------------------------------------------
+// Mechanism 5 — Legacy Net Metering (grandfathered pre-1/6/2024)
+// ---------------------------------------------------------------------------
+// Pure kWh-for-kWh netting, surplus rolls forward monthly, year-end surplus
+// is forfeited (historical DISCO practice). Some pre-2024 Instructions
+// versions applied an ~80 % credit haircut on exported kWh (DISCOs withheld
+// ~20 % for losses/fees) per MDPI Energies 2025 review — verify against the
+// legacy Instructions PDF on emrc.gov.jo.
+// ---------------------------------------------------------------------------
+
+export const LEGACY_EXPORT_HAIRCUT = 0.8;
+
+export interface LegacyNetMeteringMonthlyInput {
+  importsKWh: number;
+  exportsKWh: number;
+  retailTariffJDPerKWh: number; // resolved per sector / tier
+  exportHaircut?: number; // default 0.80
+  fuelClauseFils: number;
+  priorCarryKWh: number;
+}
+
+export interface LegacyNetMeteringMonthlyOutput {
+  invoiceJD: number;
+  carryKWh: number;
+  creditedExportsKWh: number;
+  netKWh: number;
+}
+
+export function legacyNetMeteringMonthly(
+  input: LegacyNetMeteringMonthlyInput,
+): LegacyNetMeteringMonthlyOutput {
+  const haircut = input.exportHaircut ?? LEGACY_EXPORT_HAIRCUT;
+  const creditedExportsKWh = input.exportsKWh * haircut;
+  const netKWh = input.importsKWh - creditedExportsKWh - input.priorCarryKWh;
+  if (netKWh >= 0) {
+    const invoiceJD = netKWh * (input.retailTariffJDPerKWh + input.fuelClauseFils / 1000);
+    return { invoiceJD, carryKWh: 0, creditedExportsKWh, netKWh };
+  }
+  return { invoiceJD: 0, carryKWh: -netKWh, creditedExportsKWh, netKWh };
+}
+
+// ---------------------------------------------------------------------------
+// Annual credit reset policy (Bylaw 58/2024 — open question)
+// ---------------------------------------------------------------------------
+// Whether the new monetary Net-Billing regime (M2/M1) preserves the legacy
+// year-end forfeiture practice OR introduces cash settlement is the single
+// highest-stakes open question for billing-engine math (per Bylaw 58/2024
+// engine spec §"Net-billing credit ledger mechanics"). Default to forfeit
+// to match legacy practice; flip to 'rollover' or 'cash_out' once EMRC
+// publishes a definitive FAQ.
+// ---------------------------------------------------------------------------
+
+export type AnnualResetPolicy =
+  | 'forfeit_year_end' // legacy default; surplus zeroed at Dec 31
+  | 'rollover_indefinite' // hypothetical — preserve indefinitely
+  | 'cash_out'; // hypothetical — DISCO pays surplus at year-end
+
+export const DEFAULT_ANNUAL_RESET_POLICY: AnnualResetPolicy = 'forfeit_year_end';
+
+/**
+ * Apply the year-end reset to a running credit balance. Returns the balance
+ * after reset and the JD amount forfeited / cashed out for reporting.
+ */
+export function applyAnnualReset(
+  runningCreditJD: number,
+  policy: AnnualResetPolicy = DEFAULT_ANNUAL_RESET_POLICY,
+): { balanceAfter: number; forfeitedJD: number; cashedOutJD: number } {
+  switch (policy) {
+    case 'forfeit_year_end':
+      return { balanceAfter: 0, forfeitedJD: runningCreditJD, cashedOutJD: 0 };
+    case 'cash_out':
+      return { balanceAfter: 0, forfeitedJD: 0, cashedOutJD: runningCreditJD };
+    case 'rollover_indefinite':
+      return { balanceAfter: runningCreditJD, forfeitedJD: 0, cashedOutJD: 0 };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// M3 Zero Export — sector-dependent grid fee (placeholder)
+// ---------------------------------------------------------------------------
+// Per the Bylaw 58/2024 engine spec §"Mechanism 3 / F. Grid Service Fee":
+// per-sector schedule "not published"; EMRC stated the fee "can reach zero"
+// for some sectors under M3 to preserve grid financial stability. We default
+// to the M2 schedule (same numerical values) until EMRC publishes the M3
+// table — this is conservative (likely overestimates M3 cost).
+// ---------------------------------------------------------------------------
+
+export function gridServiceFeeM3JD(input: Omit<GridFeeInput, 'mechanism'>): number {
+  // Reuse the M2 schedule as the upper-bound default. Override per-sector
+  // when EMRC publishes M3-specific values.
+  return gridServiceFeeJD({ ...input, mechanism: 'M2_net_value_onsite' });
+}
+
+// ---------------------------------------------------------------------------
+// M4 Buy-All/Sell-All — sub-300 kWh additional exemption
+// ---------------------------------------------------------------------------
+// "Consumers below 300 kWh/month are explicitly exempt from grid fees under
+// M4" — moot in practice because M4 grid fee is universally zero, but
+// preserved here for forward-compatibility if EMRC ever introduces an M4 fee.
+// ---------------------------------------------------------------------------
+
+export function m4FeeExemptForLowConsumer(monthlyKWh: number): boolean {
+  return monthlyKWh < 300;
+}
+
+// ---------------------------------------------------------------------------
+// Grandfathering hinge (Bylaw 58/2024)
+// ---------------------------------------------------------------------------
+// Hinge is the date of EMRC/DISCO **approval**, NOT physical commissioning.
+// Systems with formal connection approval before 1 June 2024 keep legacy
+// (M5) treatment indefinitely for the duration of their original contract.
+// Voluntary migration to a Bylaw 58 mechanism is permitted but likely
+// irreversible.
+// ---------------------------------------------------------------------------
+
+export const BYLAW_58_CUTOVER_DATE = new Date('2024-06-01T00:00:00Z');
+
+export function isLegacyEligible(approvalDateISO: string): boolean {
+  return new Date(approvalDateISO) < BYLAW_58_CUTOVER_DATE;
 }
 
 // ---------------------------------------------------------------------------

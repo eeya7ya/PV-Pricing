@@ -7,6 +7,7 @@ import {
   type SectorCode,
   type NetBillingMechanism,
   type WasteClass,
+  type AnnualResetPolicy,
   SECTOR_TARIFFS,
   SECTOR_TO_CLASS,
   defaultSectorFor,
@@ -20,6 +21,19 @@ import {
   sectorAllowsPFPenalty,
   gridServiceFeeJD,
   netBillingExportRateJD,
+  SPECIFIC_YIELD_KWH_PER_KWP_MONTH,
+  inverterKWacFromMonthlyKWh,
+  applyResidentialInverterCap,
+  kWpFromKWac,
+  mechanismGenerationCapFraction,
+  isEligibleForMechanism,
+  legacyNetMeteringMonthly,
+  LEGACY_EXPORT_HAIRCUT,
+  applyAnnualReset,
+  DEFAULT_ANNUAL_RESET_POLICY,
+  losesResidentialSubsidy,
+  mapFourBucketToStandardTOU,
+  mapFourBucketToWheelingTOU,
 } from "../shared/jordanTariffs";
 
 export async function registerRoutes(app: Express): Promise<void> {
@@ -123,14 +137,24 @@ export async function registerRoutes(app: Express): Promise<void> {
         // Fuel-clause: defaults to EMRC monthly bulletin (0 fils through May
         // 2026). Provide tariff_year = 2026 to pick up published values.
         tariff_year: z.number().int().optional().default(2026),
-        // Net-billing structure (Bylaw 58/2024).
+        // Net-billing structure (Bylaw 58/2024 + M5 legacy NEM).
         net_billing_mechanism: z
-          .enum(['M1_net_value_offsite', 'M2_net_value_onsite', 'M3_zero_export', 'M4_buy_all_sell_all'])
+          .enum([
+            'M1_net_value_offsite',
+            'M2_net_value_onsite',
+            'M3_zero_export',
+            'M4_buy_all_sell_all',
+            'M5_legacy_net_metering',
+          ])
           .optional()
           .default('M2_net_value_onsite'),
-        // Inverter nameplate (kWac) for grid-service-fee computation.
-        // If absent we estimate from monthly_pv_generation later.
+        // Inverter nameplate (kWac). If absent we estimate from monthly PV
+        // generation using the EMRC specific yield + DC:AC ratio + the
+        // residential 3.6/10 kWac inverter cap.
         inverter_kwac: z.number().min(0).optional(),
+        // Connection phase (relevant for residential inverter cap and
+        // single-phase subsidy-loss trigger).
+        connection_phase: z.union([z.literal(1), z.literal(3)]).optional().default(1),
         // Residential grid-fee grandfathering: applications dated 1/6/2024+
         // pay 1.000 JD/kWac/month; older systems keep the legacy 2.000.
         post_bylaw_application: z.boolean().optional().default(true),
@@ -138,6 +162,15 @@ export async function registerRoutes(app: Express): Promise<void> {
         is_welfare_beneficiary: z.boolean().optional().default(false),
         // EMRC temporary-subscription override (B2/C-temp/etc.).
         is_temporary: z.boolean().optional().default(false),
+        // Year-end credit policy. Default 'forfeit_year_end' matches legacy
+        // practice; flip when EMRC publishes M2 rollover/cash-out rules.
+        annual_reset_policy: z
+          .enum(['forfeit_year_end', 'rollover_indefinite', 'cash_out'])
+          .optional()
+          .default(DEFAULT_ANNUAL_RESET_POLICY),
+        // M5 legacy NEM export haircut (default 0.80 per MDPI Energies 2025
+        // review; verify against the legacy Instructions PDF on emrc.gov.jo).
+        legacy_export_haircut: z.number().min(0).max(1).optional().default(LEGACY_EXPORT_HAIRCUT),
       });
 
       // Residential 3-period validation schema
@@ -197,9 +230,12 @@ export async function registerRoutes(app: Express): Promise<void> {
         tariff_year,
         net_billing_mechanism,
         inverter_kwac: inverter_kwac_input,
+        connection_phase,
         post_bylaw_application,
         is_welfare_beneficiary,
         is_temporary,
+        annual_reset_policy,
+        legacy_export_haircut,
         // Residential 3-period factor fields (undefined for industrial)
         day_factors,
         evening_factors,
@@ -241,19 +277,50 @@ export async function registerRoutes(app: Express): Promise<void> {
       // Calculate total annual consumption
       const total_annual_consumption = months.reduce((sum, month) => sum + consumption[month], 0);
 
-      // X2 = (sum of consumption / 12) kWh.
-      // For Industrial: X2 = AVG/2 (project convention — industrial sites are
-      // typically only partially offset by rooftop PV rather than sized net-zero).
-      let monthly_pv_generation = total_annual_consumption / 12;
-      if (customer_type === 'Industrial') {
-        monthly_pv_generation = monthly_pv_generation / 2;
+      // X2 = (sum of consumption / 12) kWh — target monthly PV generation.
+      // Apply the mechanism's generation-cap fraction:
+      //   M1 wheeling                   50 %
+      //   M2 net billing residential   100 %
+      //   M2 net billing non-res        50 %
+      //   M3 zero export               100 %
+      //   M4 buy-all/sell-all          100 %
+      //   M5 legacy                    100 %
+      // The industrial half-sizing convention is now folded into the
+      // mechanism cap (50 % for M2 non-res), so the separate ½ factor on
+      // Industrial-customers becomes redundant for M2 — keep it only as a
+      // safety floor below the cap for legacy compatibility.
+      const mech = net_billing_mechanism as NetBillingMechanism;
+      const capFraction = mechanismGenerationCapFraction(mech, sectorClass);
+      let monthly_pv_generation = (total_annual_consumption / 12) * capFraction;
+
+      // Inverter sizing — EMRC standard specific yield 1,800 kWh/kWp/year
+      // = 150 kWh/kWp/month, with sector DC:AC ratio (1.5 residential, 1.2
+      // others) and system efficiency.
+      const estimated_kwac =
+        inverterKWacFromMonthlyKWh(monthly_pv_generation, sectorClass) / (efficiency / 100);
+      // Residential inverter cap (3.6 kWac 1-ph / 10 kWac 3-ph).
+      const capped = applyResidentialInverterCap(
+        inverter_kwac_input ?? estimated_kwac,
+        connection_phase as 1 | 3,
+        sectorClass,
+      );
+      const inverter_kwac = capped.kWac;
+      const inverter_size = inverter_kwac; // kept for back-compat in output
+      const kwp_dc = kWpFromKWac(inverter_kwac, sectorClass);
+
+      // If the inverter cap binds, the effective monthly PV generation must
+      // be re-derived from the capped inverter rating:
+      //   kWp_DC = kWac × DC:AC ratio
+      //   monthly kWh AC = kWp_DC × specific yield × efficiency
+      if (capped.capped) {
+        monthly_pv_generation = kwp_dc * SPECIFIC_YIELD_KWH_PER_KWP_MONTH * (efficiency / 100);
       }
 
-      // Inverter size (kWac) — empirical specific yield 130 kWh/kW/month
-      // derated by 95% system efficiency. (PV-sizing refinements per audit §3
-      // — DC:AC ratio, kWp caps, 1,800 kWh/kWp/yr — land in the PV round.)
-      const inverter_size = monthly_pv_generation / (130 * 0.95);
-      const inverter_kwac = inverter_kwac_input ?? inverter_size;
+      // Eligibility advisory (warning only — does not block the calc).
+      const eligibility = isEligibleForMechanism(sector, mech);
+      // Residential subsidy-loss flag.
+      const loses_subsidy = sectorClass === 'residential'
+        && losesResidentialSubsidy(inverter_kwac, connection_phase as 1 | 3);
 
       // Resolve the residential export rate from Bylaw 58/2024 default if the
       // caller passed the legacy 0.04 default and we're on residential. Caller
@@ -370,12 +437,17 @@ export async function registerRoutes(app: Express): Promise<void> {
           const x1 = consumption[month];
           const x2 = monthly_pv_generation;
 
-          const y1 = x1 * period1_factors[month]; // Off Peak (05–14)
-          const y2 = x1 * period2_factors[month]; // Partial day (14–17)
-          const y3 = x1 * period3_factors[month]; // Peak (17–23)
-          const y4 = x1 * period4_factors[month]; // Partial night (23–05)
+          const y1 = x1 * period1_factors[month]; // 05–14
+          const y2 = x1 * period2_factors[month]; // 14–17
+          const y3 = x1 * period3_factors[month]; // 17–23
+          const y4 = x1 * period4_factors[month]; // 23–05
 
-          const cons_tou = { peak: y3, partial: y2 + y4, offPeak: y1 };
+          // M1 wheeling uses different TOU windows than the standard EMRC
+          // schedule (off-peak absorbs the 14–17 mid-afternoon hours).
+          const cons_tou =
+            mech === 'M1_net_value_offsite'
+              ? mapFourBucketToWheelingTOU(y1, y2, y3, y4)
+              : mapFourBucketToStandardTOU(y1, y2, y3, y4);
           const bill_before_raw = priceMonthlyImport(x1, cons_tou);
 
           const before_final = finalizeBill(bill_before_raw, x1, mi);
@@ -407,9 +479,18 @@ export async function registerRoutes(app: Express): Promise<void> {
           const import4 = Math.max(0, y4 - k4);
           const import_energy = import1 + import2 + import3 + import4;
 
-          const imp_tou = { peak: import3, partial: import2 + import4, offPeak: import1 };
+          const imp_tou =
+            mech === 'M1_net_value_offsite'
+              ? mapFourBucketToWheelingTOU(import1, import2, import3, import4)
+              : mapFourBucketToStandardTOU(import1, import2, import3, import4);
           const import_cost = priceMonthlyImport(import_energy, imp_tou);
-          const export_revenue = calcExportRevenueJD(export_energy);
+          // M3 zero-export: any accidental export is NOT compensated.
+          // M5 legacy: export revenue is settled as kWh credit, not JD —
+          // handled by the legacy ledger below.
+          const export_revenue =
+            mech === 'M3_zero_export' || mech === 'M5_legacy_net_metering'
+              ? 0
+              : calcExportRevenueJD(export_energy);
           total_export_revenue += export_revenue;
 
           const raw_net_bill = import_cost - export_revenue;
@@ -480,7 +561,12 @@ export async function registerRoutes(app: Express): Promise<void> {
             Math.max(0, y1 - k1) + Math.max(0, y2 - k2) + Math.max(0, y3 - k3);
 
           const import_cost = import_energy > 0 ? priceMonthlyImport(import_energy) : 0;
-          const export_revenue = calcExportRevenueJD(export_energy);
+          // M3 zero-export and M5 legacy NEM monetary-side both yield no
+          // JD export revenue (M5 is settled as kWh credit elsewhere).
+          const export_revenue =
+            mech === 'M3_zero_export' || mech === 'M5_legacy_net_metering'
+              ? 0
+              : calcExportRevenueJD(export_energy);
           total_export_revenue += export_revenue;
 
           const raw_net_bill = import_cost - export_revenue;
@@ -511,11 +597,23 @@ export async function registerRoutes(app: Express): Promise<void> {
         }
       }
 
+      // Annual credit reset (Bylaw 58/2024 — single highest-stakes open
+      // question per the engine spec). Default 'forfeit_year_end' matches
+      // legacy DISCO practice. Apply at end of December.
+      const reset = applyAnnualReset(running_credit_balance, annual_reset_policy as AnnualResetPolicy);
+      const forfeited_credit_jd = reset.forfeitedJD;
+      const cashed_out_credit_jd = reset.cashedOutJD;
+      running_credit_balance = reset.balanceAfter;
+      // Forfeiture is a loss to the prosumer — surfaces as additional cost
+      // (the credit they earned but lost). Cash-out is a refund (negative cost).
+      total_cost_after += forfeited_credit_jd - cashed_out_credit_jd;
+
       // Annual grid-service fee (Bylaw 58/2024 §V) — JD/kWac × inverter size
-      // × 12. Sector- and mechanism-dependent; M4 Buy-All/Sell-All is exempt.
+      // × 12. Sector- and mechanism-dependent; M4 Buy-All/Sell-All and M5
+      // legacy NEM are exempt.
       const grid_service_fee_monthly_jd = gridServiceFeeJD({
         sector,
-        mechanism: net_billing_mechanism as NetBillingMechanism,
+        mechanism: mech,
         inverterKWac: inverter_kwac,
         postBylawApplication: post_bylaw_application,
         isWelfareBeneficiary: is_welfare_beneficiary,
@@ -548,6 +646,18 @@ export async function registerRoutes(app: Express): Promise<void> {
           sector,
           sector_label: sectorTariff.label,
           net_billing_mechanism,
+          // PV sizing (EMRC standard yield + DC:AC + residential caps)
+          kwp_dc,
+          dc_ac_ratio: sectorClass === 'residential' ? 1.5 : 1.2,
+          specific_yield_kwh_per_kwp_year: SPECIFIC_YIELD_KWH_PER_KWP_MONTH * 12,
+          inverter_cap_kwac: capped.cap ?? null,
+          inverter_cap_binding: capped.capped,
+          mechanism_cap_fraction: capFraction,
+          loses_residential_subsidy: loses_subsidy,
+          eligibility_status: eligibility,
+          annual_reset_policy,
+          forfeited_credit_jd,
+          cashed_out_credit_jd,
           total_savings_with_net_billing: annual_savings + total_net_billing_savings
         },
         net_billing_enabled: true
