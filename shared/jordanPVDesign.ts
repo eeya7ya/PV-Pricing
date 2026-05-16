@@ -94,6 +94,120 @@ export const AMMAN_MONTHLY_TEMP_C: number[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Time-of-use distribution profiles
+// ---------------------------------------------------------------------------
+// Self-consumption, export and import per TOU bucket are computed as
+//   SC = min(generation_in_bucket, load_in_bucket)
+// — i.e. the time-coincident overlap of generation and load. This requires
+// distributing each month's total kWh across the EMRC TOU buckets (off-peak
+// 05–14, partial 14–17 + 23–05, peak 17–23). The profiles below are derived
+// from typical Jordan diurnal patterns:
+//
+//   - Load profile depends on sector (residential = evening-heavy due to
+//     A/C + cooking + lighting; commercial = daytime; hospitals = 24/7).
+//   - PV profile depends on the region's irradiance (solar day 06–18 means
+//     most generation lands in 05–14 off-peak, some in 14–17 partial, and
+//     almost none in 17–23 peak).
+//
+// These are sector / zone defaults — every cell is overridable in the
+// detailed UI. The point is that the defaults are physically meaningful
+// rather than user-typed guesses.
+// ---------------------------------------------------------------------------
+
+export interface TOUShares {
+  /** 05:00–14:00 (9 h) */
+  offPeak: number;
+  /** 14:00–17:00 + 23:00–05:00 (9 h split into day and night halves) */
+  partial: number;
+  /** 17:00–23:00 (6 h) */
+  peak: number;
+}
+
+/**
+ * Sector-typical load distribution across the standard EMRC 3-period TOU.
+ * Shares sum to 1.000. Derived from Jordan-typical diurnal patterns; users
+ * can override in the detailed view.
+ */
+export const SECTOR_LOAD_TOU: Record<string, TOUShares> = {
+  // Residential — evening-heavy. A/C ramps mid-afternoon, peak from
+  // cooking + lighting + TV at 17–23. Some morning load 5–9.
+  'A1_subsidized':         { offPeak: 0.30, partial: 0.25, peak: 0.45 },
+  'A2_unsubsidized':       { offPeak: 0.30, partial: 0.25, peak: 0.45 },
+  // Commercial — office hours 8–17 (mostly off-peak + partial day).
+  'B1_commercial':         { offPeak: 0.50, partial: 0.30, peak: 0.20 },
+  'B2_temp_commercial':    { offPeak: 0.45, partial: 0.30, peak: 0.25 },
+  'B3_banks':              { offPeak: 0.55, partial: 0.30, peak: 0.15 }, // 9–14 + some 14–17
+  'B4_telecom':            { offPeak: 0.34, partial: 0.33, peak: 0.33 }, // 24/7
+  // Industrial — typically 24/5 or 24/7 day shifts.
+  'C1_small_industrial':   { offPeak: 0.45, partial: 0.30, peak: 0.25 },
+  'C2_medium_industrial':  { offPeak: 0.40, partial: 0.30, peak: 0.30 },
+  'C3_large_industrial':   { offPeak: 0.34, partial: 0.33, peak: 0.33 }, // 24/7
+  'C4_extractive':         { offPeak: 0.34, partial: 0.33, peak: 0.33 },
+  // Hotels — evening-heavy due to guest activity + restaurants + AC.
+  'D1_hotel_post2008':     { offPeak: 0.30, partial: 0.30, peak: 0.40 },
+  'D2_hotel_pre2008_flat': { offPeak: 0.30, partial: 0.30, peak: 0.40 },
+  'D2_hotel_pre2008_tou':  { offPeak: 0.30, partial: 0.30, peak: 0.40 },
+  'D3_hotel_low_star':     { offPeak: 0.30, partial: 0.30, peak: 0.40 },
+  // Hospitals — 24/7 with slight daytime peak (surgeries, outpatients).
+  'E1_private_hospital':   { offPeak: 0.36, partial: 0.32, peak: 0.32 },
+  'E2_govt_hospital':      { offPeak: 0.36, partial: 0.32, peak: 0.32 },
+  // Agriculture — irrigation often daytime in Jordan.
+  'F1_agri_std':           { offPeak: 0.55, partial: 0.25, peak: 0.20 },
+  'F2_agri_legacy':        { offPeak: 0.55, partial: 0.25, peak: 0.20 },
+  'F3_agri_mixed_well':    { offPeak: 0.55, partial: 0.25, peak: 0.20 },
+  // Special
+  'G1_standard_7tier':     { offPeak: 0.32, partial: 0.27, peak: 0.41 }, // residential-like
+  'G2_water_pumping':      { offPeak: 0.55, partial: 0.25, peak: 0.20 }, // daytime pumping
+  'G3_street_lighting':    { offPeak: 0.00, partial: 0.30, peak: 0.70 }, // NIGHT ONLY: 17–23 + 23–05
+  'G4_govt_armed_forces':  { offPeak: 0.50, partial: 0.30, peak: 0.20 }, // working hours
+  'G5_ev_home':            { offPeak: 0.10, partial: 0.50, peak: 0.40 }, // night-charging
+  'G6_ev_public_wholesale':{ offPeak: 0.40, partial: 0.35, peak: 0.25 },
+  'G7_broadcasting':       { offPeak: 0.34, partial: 0.33, peak: 0.33 },
+  'G8_ports':              { offPeak: 0.34, partial: 0.33, peak: 0.33 },
+};
+
+/**
+ * PV-generation distribution across the standard EMRC 3-period TOU,
+ * derived from Jordan's diurnal solar profile. Sun is up roughly 06–18
+ * with the bulk of energy 09–15. Off-peak (05–14) captures most of the
+ * morning-to-noon yield, partial (14–17 day + 23–05 night) captures the
+ * afternoon decline, and peak (17–23) gets a small evening sliver in
+ * summer plus nothing in winter.
+ *
+ * Zone differences are minor (Southern Desert has slightly more morning
+ * hours due to lower humidity); within-zone variation is <2 %.
+ */
+export const ZONE_PV_TOU: Record<ClimateZone, TOUShares> = {
+  N: { offPeak: 0.68, partial: 0.27, peak: 0.05 },
+  S: { offPeak: 0.70, partial: 0.26, peak: 0.04 }, // Southern Desert clearer mornings
+  E: { offPeak: 0.69, partial: 0.27, peak: 0.04 },
+  V: { offPeak: 0.66, partial: 0.28, peak: 0.06 }, // Jordan Valley slight haze damping
+};
+
+/**
+ * PV-generation distribution under wheeling (M1) TOU windows:
+ *   off-peak 05–17 (12 h, absorbs 14–17), peak 17–23, partial 23–05.
+ * Almost all generation falls in the wheeling off-peak window.
+ */
+export const ZONE_PV_TOU_WHEELING: Record<ClimateZone, TOUShares> = {
+  N: { offPeak: 0.95, partial: 0.00, peak: 0.05 },
+  S: { offPeak: 0.96, partial: 0.00, peak: 0.04 },
+  E: { offPeak: 0.96, partial: 0.00, peak: 0.04 },
+  V: { offPeak: 0.94, partial: 0.00, peak: 0.06 },
+};
+
+/** Look up load TOU profile for a sector, with safe fallback. */
+export function loadTOUFor(sector: string): TOUShares {
+  return SECTOR_LOAD_TOU[sector] ?? { offPeak: 0.34, partial: 0.33, peak: 0.33 };
+}
+
+/** Look up PV TOU profile for a zone and mechanism. */
+export function pvTOUFor(zone: ClimateZone, mechanism: string): TOUShares {
+  if (mechanism === 'M1_net_value_offsite') return ZONE_PV_TOU_WHEELING[zone];
+  return ZONE_PV_TOU[zone];
+}
+
+// ---------------------------------------------------------------------------
 // System class & loss-chain defaults
 // ---------------------------------------------------------------------------
 

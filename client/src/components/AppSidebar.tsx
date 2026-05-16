@@ -20,14 +20,8 @@ const items = [
   {
     title: 'System Designer',
     url: 'designer',
-    icon: Calculator,
-    description: 'Configure and design your solar PV system'
-  },
-  {
-    title: 'PV Design',
-    url: 'pv-design',
     icon: Sun,
-    description: 'Quick Quote (5 inputs) or Detailed Engineering — Jordan resource model'
+    description: 'Configure consumption, sector, and PV system in one flow'
   },
   {
     title: 'Dashboard',

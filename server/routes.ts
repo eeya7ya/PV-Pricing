@@ -2,7 +2,11 @@ import type { Express } from "express";
 import { setupAuth } from "./fakeAuth";
 import { z } from "zod";
 import { storage } from "./storage";
-import { insertSolarProjectSchema, type CalculationResults, type MonthlyConsumption, type TimeFactors, IndustrialTariffsSchema, TimeFactorsSchema, MonthlyConsumptionSchema } from "../shared/schema";
+import {
+  insertSolarProjectSchema,
+  type CalculationResults,
+  MonthlyConsumptionSchema,
+} from "../shared/schema";
 import {
   type SectorCode,
   type NetBillingMechanism,
@@ -12,9 +16,6 @@ import {
   SECTOR_TO_CLASS,
   defaultSectorFor,
   priceImportJD,
-  priceTOU3JD,
-  priceTieredJD,
-  priceFlatJD,
   applyMinimumBillJD,
   calcUniversalAddOns,
   powerFactorSurchargeJD,
@@ -32,719 +33,473 @@ import {
   applyAnnualReset,
   DEFAULT_ANNUAL_RESET_POLICY,
   losesResidentialSubsidy,
-  mapFourBucketToStandardTOU,
-  mapFourBucketToWheelingTOU,
 } from "../shared/jordanTariffs";
+import {
+  type ClimateZone,
+  JORDAN_REGIONS,
+  loadTOUFor,
+  pvTOUFor,
+} from "../shared/jordanPVDesign";
 
 export async function registerRoutes(app: Express): Promise<void> {
-  // Setup fake (demo) authentication routes — replaces Replit/Google OAuth.
   setupAuth(app);
 
-  // Solar PV Calculator API Routes
-  
-  // Get all projects
-  app.get("/api/projects", async (req, res) => {
+  // ---- Project CRUD -------------------------------------------------------
+
+  app.get("/api/projects", async (_req, res) => {
     try {
-      const projects = await storage.getAllSolarProjects();
-      res.json(projects);
-    } catch (error) {
+      res.json(await storage.getAllSolarProjects());
+    } catch {
       res.status(500).json({ error: "Failed to fetch projects" });
     }
   });
 
-  // Get single project
   app.get("/api/projects/:id", async (req, res) => {
     try {
       const project = await storage.getSolarProject(req.params.id);
-      if (!project) {
-        return res.status(404).json({ error: "Project not found" });
-      }
+      if (!project) return res.status(404).json({ error: "Project not found" });
       res.json(project);
-    } catch (error) {
+    } catch {
       res.status(500).json({ error: "Failed to fetch project" });
     }
   });
 
-  // Create new project
   app.post("/api/projects", async (req, res) => {
     try {
-      const validatedData = insertSolarProjectSchema.parse(req.body);
-      const project = await storage.createSolarProject(validatedData);
-      res.status(201).json(project);
+      const data = insertSolarProjectSchema.parse(req.body);
+      res.status(201).json(await storage.createSolarProject(data));
     } catch (error) {
       res.status(400).json({ error: "Invalid project data", details: error });
     }
   });
 
-  // Update project
   app.put("/api/projects/:id", async (req, res) => {
     try {
-      const validatedData = insertSolarProjectSchema.partial().parse(req.body);
-      const project = await storage.updateSolarProject(req.params.id, validatedData);
-      if (!project) {
-        return res.status(404).json({ error: "Project not found" });
-      }
+      const data = insertSolarProjectSchema.partial().parse(req.body);
+      const project = await storage.updateSolarProject(req.params.id, data);
+      if (!project) return res.status(404).json({ error: "Project not found" });
       res.json(project);
     } catch (error) {
       res.status(400).json({ error: "Invalid project data", details: error });
     }
   });
 
-  // Delete project
   app.delete("/api/projects/:id", async (req, res) => {
     try {
-      const deleted = await storage.deleteSolarProject(req.params.id);
-      if (!deleted) {
-        return res.status(404).json({ error: "Project not found" });
-      }
+      const ok = await storage.deleteSolarProject(req.params.id);
+      if (!ok) return res.status(404).json({ error: "Project not found" });
       res.status(204).send();
-    } catch (error) {
+    } catch {
       res.status(500).json({ error: "Failed to delete project" });
     }
   });
 
-  // Calculate solar system performance.
+  // ---------------------------------------------------------------------
+  // POST /api/calculate
   //
-  // Tariff math reflects the Jordan EMRC 2025 Tariff Guide and Bylaw 58/2024
-  // for net-billing economics (see shared/jordanTariffs.ts for the canonical
-  // reference and CALCULATIONS.md for the full methodology).
+  // Unified accurate billing engine — replaces the legacy factor-based
+  // pipeline (no more user-set day/evening/night load percentages, no
+  // user-set sun-distribution factors, no user-set PV-self-consumption
+  // percentages — all of which had no physical basis).
+  //
+  // Inputs (all numeric quantities in kWh / kWac / JD unless noted):
+  //   • monthly consumption (12 values, kWh)
+  //   • monthly PV generation (12 values, kWh) from the physics engine
+  //   • sector + mechanism + power factor + inverter kWac + kWp DC
+  //   • load TOU profile (sector default; user override)
+  //   • PV   TOU profile (zone+mechanism default; user override)
+  //
+  // Per-month per-TOU-bucket energy balance:
+  //   SC_b = min(G_b, L_b)            (self-consumption per bucket)
+  //   E_b  = max(0, G_b − L_b)        (export)
+  //   I_b  = max(0, L_b − G_b)        (import)
+  //
+  // Billing:
+  //   • Bill_before = priceImport(sector, total_load, {Lp,La,Lo}) + add-ons → min-bill
+  //   • Energy charge = priceImport(sector, total_import, {Ip,Ia,Io})
+  //   • Export revenue = total_export × export_rate (0 under M3/M5)
+  //   • Raw net = energy_charge − export_revenue
+  //   • Apply credit ledger → bill_after_credits
+  //   • Add universal add-ons (rural fils, fuel clause, TV, GAM, meter,
+  //     waste) on imported kWh
+  //   • Apply PF penalty (if sector allows and pf < 0.88)
+  //   • Apply min bill floor
+  //   • At Dec, apply annual reset policy
+  //   • Annualise: add grid service fee × 12
+  // ---------------------------------------------------------------------
   app.post("/api/calculate", async (req, res) => {
     try {
-      // Validate request body based on customer type
       const SECTOR_CODES = Object.keys(SECTOR_TARIFFS) as [SectorCode, ...SectorCode[]];
-      const baseCalculationSchema = z.object({
+      const TOUSchema = z.object({
+        offPeak: z.number().min(0).max(1),
+        partial: z.number().min(0).max(1),
+        peak:    z.number().min(0).max(1),
+      });
+      const schema = z.object({
+        // Demand side
         consumption: MonthlyConsumptionSchema,
-        efficiency: z.number().min(0).max(100).optional().default(95),
-        tariff_supported: z.boolean().optional().default(true),
-        // Bylaw 58/2024 default export rates: 0.050 JD/kWh residential,
-        // 0.040 JD/kWh non-residential. Caller may override.
-        export_tariff: z.number().min(0).optional().default(0.05),
+        // Supply side (from PV physics engine)
+        monthly_pv_generation: z.array(z.number().min(0)).length(12),
+        inverter_kwac: z.number().min(0),
+        kwp_dc: z.number().min(0),
+        // Tariff identity
+        sector: z.enum(SECTOR_CODES),
         customer_type: z.string().optional().default('Residential'),
-        // Sector dispatcher (Jordan EMRC 2025 sector codes). If omitted we
-        // derive a sensible default from customer_type + tariff_supported.
-        sector: z.enum(SECTOR_CODES).optional(),
-        // Power-factor input (0.50–1.00). Default 0.90 → no penalty.
-        // Penalty applies only to industrial C2/C3/C4, 3-part agri F2, and
-        // 3-part 4★+ hotels D1/D2 (NEPCO §I.1.d).
-        power_factor: z.number().min(0.1).max(1).optional().default(0.9),
-        // Universal add-on toggles (default to "on" per EMRC reality).
-        apply_rural_fils: z.boolean().optional().default(true),
-        apply_tv_fee: z.boolean().optional().default(true),
-        apply_meter_rent: z.boolean().optional().default(true),
-        meter_phase: z.union([z.literal(1), z.literal(3)]).optional().default(1),
-        apply_gam_fee: z.boolean().optional().default(false),
-        waste_class: z.enum(['A', 'B', 'C']).nullable().optional().default(null),
-        // Fuel-clause: defaults to EMRC monthly bulletin (0 fils through May
-        // 2026). Provide tariff_year = 2026 to pick up published values.
-        tariff_year: z.number().int().optional().default(2026),
-        // Net-billing structure (Bylaw 58/2024 + M5 legacy NEM).
-        net_billing_mechanism: z
-          .enum([
-            'M1_net_value_offsite',
-            'M2_net_value_onsite',
-            'M3_zero_export',
-            'M4_buy_all_sell_all',
-            'M5_legacy_net_metering',
-          ])
-          .optional()
-          .default('M2_net_value_onsite'),
-        // Inverter nameplate (kWac). If absent we estimate from monthly PV
-        // generation using the EMRC specific yield + DC:AC ratio + the
-        // residential 3.6/10 kWac inverter cap.
-        inverter_kwac: z.number().min(0).optional(),
-        // Connection phase (relevant for residential inverter cap and
-        // single-phase subsidy-loss trigger).
-        connection_phase: z.union([z.literal(1), z.literal(3)]).optional().default(1),
-        // Residential grid-fee grandfathering: applications dated 1/6/2024+
-        // pay 1.000 JD/kWac/month; older systems keep the legacy 2.000.
-        post_bylaw_application: z.boolean().optional().default(true),
-        // NAF / Takaful 1&3 / Royal Initiative beneficiaries are exempt.
-        is_welfare_beneficiary: z.boolean().optional().default(false),
-        // EMRC temporary-subscription override (B2/C-temp/etc.).
-        is_temporary: z.boolean().optional().default(false),
-        // Year-end credit policy. Default 'forfeit_year_end' matches legacy
-        // practice; flip when EMRC publishes M2 rollover/cash-out rules.
-        annual_reset_policy: z
-          .enum(['forfeit_year_end', 'rollover_indefinite', 'cash_out'])
-          .optional()
-          .default(DEFAULT_ANNUAL_RESET_POLICY),
-        // M5 legacy NEM export haircut (default 0.80 per MDPI Energies 2025
-        // review; verify against the legacy Instructions PDF on emrc.gov.jo).
-        legacy_export_haircut: z.number().min(0).max(1).optional().default(LEGACY_EXPORT_HAIRCUT),
-        // PV Design module override (Jordan PV physics engine). When
-        // present, the per-month PV generation comes from the design engine
-        // (region × tilt × loss chain) instead of the consumption-based
-        // X2 = (consumption / 12) × mechanism-cap-fraction fallback.
-        monthly_pv_generation_override: z.array(z.number().min(0)).length(12).optional(),
-        kwp_dc_override: z.number().min(0).optional(),
+        net_billing_mechanism: z.enum([
+          'M1_net_value_offsite',
+          'M2_net_value_onsite',
+          'M3_zero_export',
+          'M4_buy_all_sell_all',
+          'M5_legacy_net_metering',
+        ]).default('M2_net_value_onsite'),
+        // TOU profiles (sector / zone defaults)
+        load_tou: TOUSchema.optional(),
+        pv_tou:   TOUSchema.optional(),
+        zone: z.enum(['N', 'S', 'E', 'V']).optional(),
+        // Modifiers
+        export_tariff: z.number().min(0).optional(),
+        power_factor: z.number().min(0.1).max(1).default(0.9),
+        efficiency: z.number().min(0).max(100).default(95),
+        // Universal add-ons
+        apply_rural_fils: z.boolean().default(true),
+        apply_tv_fee:     z.boolean().default(true),
+        apply_meter_rent: z.boolean().default(true),
+        meter_phase: z.union([z.literal(1), z.literal(3)]).default(1),
+        connection_phase: z.union([z.literal(1), z.literal(3)]).default(1),
+        apply_gam_fee: z.boolean().default(false),
+        waste_class: z.enum(['A', 'B', 'C']).nullable().default(null),
+        tariff_year: z.number().int().default(2026),
+        // Net billing
+        post_bylaw_application: z.boolean().default(true),
+        is_welfare_beneficiary: z.boolean().default(false),
+        is_temporary: z.boolean().default(false),
+        annual_reset_policy: z.enum([
+          'forfeit_year_end', 'rollover_indefinite', 'cash_out',
+        ]).default(DEFAULT_ANNUAL_RESET_POLICY),
+        legacy_export_haircut: z.number().min(0).max(1).default(LEGACY_EXPORT_HAIRCUT),
       });
 
-      // Residential 3-period validation schema
-      const residentialSchema = baseCalculationSchema.extend({
-        day_factors: TimeFactorsSchema,
-        evening_factors: TimeFactorsSchema,
-        night_factors: TimeFactorsSchema,
-        sun_peak_factors: TimeFactorsSchema,
-        sun_medium_factors: TimeFactorsSchema,
-        sun_low_factors: TimeFactorsSchema,
-        pv_consume_day: TimeFactorsSchema,
-        pv_consume_evening: TimeFactorsSchema,
-        pv_consume_night: TimeFactorsSchema
-      });
+      const input = schema.parse(req.body);
 
-      // Industrial 4-period validation schema
-      const industrialSchema = baseCalculationSchema.extend({
-        period1_factors: TimeFactorsSchema,
-        period2_factors: TimeFactorsSchema,
-        period3_factors: TimeFactorsSchema,
-        period4_factors: TimeFactorsSchema,
-        sun_period1_factors: TimeFactorsSchema,
-        sun_period2_factors: TimeFactorsSchema,
-        sun_period3_factors: TimeFactorsSchema,
-        sun_period4_factors: TimeFactorsSchema,
-        pv_consume_period1: TimeFactorsSchema,
-        pv_consume_period2: TimeFactorsSchema,
-        pv_consume_period3: TimeFactorsSchema,
-        pv_consume_period4: TimeFactorsSchema,
-        industrial_tariffs: IndustrialTariffsSchema
-      });
-
-      // Validate request based on customer type
-      let validatedData;
-      const customerType = req.body.customer_type || 'Residential';
-      
-      if (customerType === 'Industrial') {
-        validatedData = industrialSchema.parse(req.body);
-      } else {
-        validatedData = residentialSchema.parse(req.body);
-      }
-
-      const {
-        consumption,
-        efficiency,
-        tariff_supported,
-        export_tariff,
-        customer_type,
-        sector: sector_override,
-        power_factor,
-        apply_rural_fils,
-        apply_tv_fee,
-        apply_meter_rent,
-        meter_phase,
-        apply_gam_fee,
-        waste_class,
-        tariff_year,
-        net_billing_mechanism,
-        inverter_kwac: inverter_kwac_input,
-        connection_phase,
-        post_bylaw_application,
-        is_welfare_beneficiary,
-        is_temporary,
-        annual_reset_policy,
-        legacy_export_haircut,
-        monthly_pv_generation_override,
-        kwp_dc_override,
-        // Residential 3-period factor fields (undefined for industrial)
-        day_factors,
-        evening_factors,
-        night_factors,
-        sun_peak_factors,
-        sun_medium_factors,
-        sun_low_factors,
-        pv_consume_day,
-        pv_consume_evening,
-        pv_consume_night,
-        // Industrial 4-period factor fields (undefined for residential)
-        period1_factors,
-        period2_factors,
-        period3_factors,
-        period4_factors,
-        sun_period1_factors,
-        sun_period2_factors,
-        sun_period3_factors,
-        sun_period4_factors,
-        pv_consume_period1,
-        pv_consume_period2,
-        pv_consume_period3,
-        pv_consume_period4,
-        industrial_tariffs,
-      } = validatedData as any;
-
-      // Resolve sector — explicit override wins, else derive from customer type.
-      // Residential tariff_supported=false → A2_unsubsidized; true → A1_subsidized.
-      const sector: SectorCode =
-        sector_override ??
-        defaultSectorFor(customer_type as any, {
-          subsidized: customer_type === 'Residential' ? Boolean(tariff_supported) : undefined,
-        });
+      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const sector = input.sector;
       const sectorTariff = SECTOR_TARIFFS[sector];
       const sectorClass = SECTOR_TO_CLASS[sector];
+      const mech = input.net_billing_mechanism;
+      const zone: ClimateZone = (input.zone as ClimateZone) ?? 'N';
 
-      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      // Resolve TOU profiles — explicit user override → defaults
+      const loadTOU = input.load_tou ?? loadTOUFor(sector);
+      const pvTOU   = input.pv_tou   ?? pvTOUFor(zone, mech);
 
-      // Calculate total annual consumption
-      const total_annual_consumption = months.reduce((sum, month) => sum + consumption[month], 0);
+      // Total annual consumption
+      const annualConsumption = months.reduce((s, m) =>
+        s + ((input.consumption as any)[m] || 0), 0);
 
-      // X2 = (sum of consumption / 12) kWh — target monthly PV generation.
-      // Apply the mechanism's generation-cap fraction:
-      //   M1 wheeling                   50 %
-      //   M2 net billing residential   100 %
-      //   M2 net billing non-res        50 %
-      //   M3 zero export               100 %
-      //   M4 buy-all/sell-all          100 %
-      //   M5 legacy                    100 %
-      // The industrial half-sizing convention is now folded into the
-      // mechanism cap (50 % for M2 non-res), so the separate ½ factor on
-      // Industrial-customers becomes redundant for M2 — keep it only as a
-      // safety floor below the cap for legacy compatibility.
-      const mech = net_billing_mechanism as NetBillingMechanism;
-      const capFraction = mechanismGenerationCapFraction(mech, sectorClass);
-      let monthly_pv_generation = (total_annual_consumption / 12) * capFraction;
+      // Export rate: Bylaw 58/2024 default by sector class unless overridden
+      const exportRate = input.export_tariff ?? netBillingExportRateJD(sector);
 
-      // Inverter sizing — EMRC standard specific yield 1,800 kWh/kWp/year
-      // = 150 kWh/kWp/month, with sector DC:AC ratio (1.5 residential, 1.2
-      // others) and system efficiency.
-      const estimated_kwac =
-        inverterKWacFromMonthlyKWh(monthly_pv_generation, sectorClass) / (efficiency / 100);
-      // Residential inverter cap (3.6 kWac 1-ph / 10 kWac 3-ph).
-      const capped = applyResidentialInverterCap(
-        inverter_kwac_input ?? estimated_kwac,
-        connection_phase as 1 | 3,
-        sectorClass,
-      );
-      const inverter_kwac = capped.kWac;
-      const inverter_size = inverter_kwac; // kept for back-compat in output
-      const kwp_dc = kWpFromKWac(inverter_kwac, sectorClass);
-
-      // If the inverter cap binds, the effective monthly PV generation must
-      // be re-derived from the capped inverter rating:
-      //   kWp_DC = kWac × DC:AC ratio
-      //   monthly kWh AC = kWp_DC × specific yield × efficiency
-      if (capped.capped) {
-        monthly_pv_generation = kwp_dc * SPECIFIC_YIELD_KWH_PER_KWP_MONTH * (efficiency / 100);
-      }
-
-      // PV Design override: if a 12-vector arrived from the physics engine,
-      // use it directly (replacing the consumption-based X2 fallback). Each
-      // month gets its own value.
-      const pvGenForMonth = (monthIndex: number): number =>
-        monthly_pv_generation_override
-          ? monthly_pv_generation_override[monthIndex]
-          : monthly_pv_generation;
-      const annual_pv_generation = monthly_pv_generation_override
-        ? monthly_pv_generation_override.reduce((s: number, v: number) => s + v, 0)
-        : monthly_pv_generation * 12;
-      // If the design module also supplied a kWp_DC, surface it; else compute
-      // from the resolved inverter kWac × DC:AC ratio.
-      const final_kwp_dc = kwp_dc_override ?? kwp_dc;
-
-      // Eligibility advisory (warning only — does not block the calc).
+      // Eligibility advisory and subsidy-loss flag
       const eligibility = isEligibleForMechanism(sector, mech);
-      // Residential subsidy-loss flag.
-      const loses_subsidy = sectorClass === 'residential'
-        && losesResidentialSubsidy(inverter_kwac, connection_phase as 1 | 3);
+      const losesSubsidy = sectorClass === 'residential'
+        && losesResidentialSubsidy(input.inverter_kwac, input.connection_phase as 1 | 3);
 
-      // Resolve the residential export rate from Bylaw 58/2024 default if the
-      // caller passed the legacy 0.04 default and we're on residential. Caller
-      // can always override; we just align the *default* with sector reality.
-      const effective_export_rate_jd =
-        export_tariff != null && export_tariff !== 0.04
-          ? export_tariff
-          : netBillingExportRateJD(sector);
-
-      // Helper — price a month's import for the resolved sector.
-      // For tiered/flat sectors we price the monthly total; for TOU sectors
-      // we feed the {peak, partial, offPeak} breakdown.
-      const priceMonthlyImport = (
-        monthlyKWh: number,
-        tou?: { peak: number; partial: number; offPeak: number },
-      ): number =>
-        priceImportJD({
-          sector,
-          monthlyKWh,
-          kwhByPeriod: tou,
-          isTemporary: is_temporary,
-        });
-
-      // Helper — export revenue for a month. Residential uses the flat NB
-      // export rate; non-residential TOU may also use flat (Bylaw 58/2024
-      // defaults to 0.040 JD/kWh for non-residential NB Mechanism 2).
-      const calcExportRevenueJD = (exportKWh: number, _exportByPeriod?: any): number => {
-        return exportKWh * effective_export_rate_jd;
-      };
-
-      // Helper — universal add-ons + min-bill + PF penalty applied to a raw
-      // post-PV bill. Add-ons (rural fils, fuel clause, GAM, waste, TV,
-      // meter rent) are charged on *imported* energy regardless of PV.
-      const finalizeBill = (
-        rawBillJD: number,
-        importKWh: number,
-        monthIndex: number,
-      ): { finalBill: number; addOns: ReturnType<typeof calcUniversalAddOns>; pfSurcharge: number } => {
-        const monthKey = `${tariff_year}-${String(monthIndex + 1).padStart(2, '0')}`;
-        const addOns = calcUniversalAddOns({
+      // Universal add-ons helper (per month, on imported kWh)
+      const addOnsFor = (importKWh: number, monthIdx: number) =>
+        calcUniversalAddOns({
           sector,
           monthlyImportKWh: Math.max(0, importKWh),
-          monthKey,
-          meterPhase: meter_phase,
-          applyTvFee: apply_tv_fee,
-          applyGAM: apply_gam_fee,
-          wasteClass: (waste_class as WasteClass) ?? null,
-          applyRuralFils: apply_rural_fils,
-          applyMeterRent: apply_meter_rent,
+          monthKey: `${input.tariff_year}-${String(monthIdx + 1).padStart(2, '0')}`,
+          meterPhase: input.meter_phase,
+          applyTvFee: input.apply_tv_fee,
+          applyGAM: input.apply_gam_fee,
+          wasteClass: (input.waste_class as WasteClass) ?? null,
+          applyRuralFils: input.apply_rural_fils,
+          applyMeterRent: input.apply_meter_rent,
         });
-        const pfSurcharge =
-          sectorAllowsPFPenalty(sector) && power_factor < 0.88
-            ? powerFactorSurchargeJD(Math.max(0, rawBillJD), power_factor)
-            : 0;
-        const subtotal = Math.max(0, rawBillJD) + addOns.totalJD + pfSurcharge;
-        const finalBill = applyMinimumBillJD(subtotal, sector);
-        return { finalBill, addOns, pfSurcharge };
-      };
-      
-      // Calculate before and after scenarios - EXACT logic
-      let total_cost_before = 0;
-      let total_cost_after = 0;
-      let total_export_revenue = 0;
-      let total_self_consumption = 0;
-      let total_export = 0;
-      
-      // Net billing system - track credits/debits across months
-      let running_credit_balance = 0; // Carries forward monthly credits
-      let total_net_billing_savings = 0; // Additional savings from net billing
-      
-      const monthly_data = [];
 
-      // Shared net-billing credit ledger application. Bylaw 58/2024 specifies
-      // monthly cash credits that draw down deficits. (PV round will add the
-      // annual reset — credits do not roll over indefinitely.)
-      const applyCreditLedger = (rawNetBill: number) => {
-        let monthly_credit_used = 0;
-        let monthly_credit_generated = 0;
-        let bill_after_credits = 0;
+      // Monthly loop — proper time-coincident energy balance per TOU bucket
+      let runningCreditJD = 0;
+      let runningCarryKWh = 0; // M5 legacy NEM only
+      let totalCostBefore = 0;
+      let totalCostAfter = 0;
+      let totalExportRevenue = 0;
+      let totalSelfConsumption = 0;
+      let totalExport = 0;
+      let totalImport = 0;
+      let netBillingSavings = 0;
+      const monthly: any[] = [];
 
-        if (rawNetBill < 0) {
-          monthly_credit_generated = -rawNetBill;
-          running_credit_balance += monthly_credit_generated;
-          bill_after_credits = 0;
-        } else if (running_credit_balance > 0) {
-          if (running_credit_balance >= rawNetBill) {
-            monthly_credit_used = rawNetBill;
-            running_credit_balance -= rawNetBill;
-            bill_after_credits = 0;
-            total_net_billing_savings += rawNetBill;
-          } else {
-            monthly_credit_used = running_credit_balance;
-            bill_after_credits = rawNetBill - running_credit_balance;
-            total_net_billing_savings += running_credit_balance;
-            running_credit_balance = 0;
-          }
+      for (let mi = 0; mi < 12; mi++) {
+        const monthKey = months[mi];
+        const load = (input.consumption as any)[monthKey] || 0;
+        const gen  = input.monthly_pv_generation[mi];
+
+        // 1. Distribute load and generation across TOU buckets
+        const Lp = load * loadTOU.peak;
+        const La = load * loadTOU.partial;
+        const Lo = load * loadTOU.offPeak;
+        const Gp = gen * pvTOU.peak;
+        const Ga = gen * pvTOU.partial;
+        const Go = gen * pvTOU.offPeak;
+
+        // 2. Energy balance per bucket.
+        //    M4 Buy-All / Sell-All has separate meters: ALL load imports at
+        //    retail and ALL generation exports at the fixed sell rate (no
+        //    on-site overlap, no self-consumption).
+        //    Every other mechanism nets on-site: SC = min(G, L).
+        let SCp: number, SCa: number, SCo: number;
+        let Ep: number, Ea: number, Eo: number;
+        let Ip: number, Ia: number, Io: number;
+        if (mech === 'M4_buy_all_sell_all') {
+          SCp = SCa = SCo = 0;
+          Ep = Gp; Ea = Ga; Eo = Go;
+          Ip = Lp; Ia = La; Io = Lo;
         } else {
-          bill_after_credits = rawNetBill;
+          SCp = Math.min(Gp, Lp);
+          SCa = Math.min(Ga, La);
+          SCo = Math.min(Go, Lo);
+          Ep = Math.max(0, Gp - Lp);
+          Ea = Math.max(0, Ga - La);
+          Eo = Math.max(0, Go - Lo);
+          Ip = Math.max(0, Lp - Gp);
+          Ia = Math.max(0, La - Ga);
+          Io = Math.max(0, Lo - Go);
         }
-        return { monthly_credit_used, monthly_credit_generated, bill_after_credits };
-      };
+        const SC = SCp + SCa + SCo;
+        const exportEnergy = Ep + Ea + Eo;
+        const importEnergy = Ip + Ia + Io;
 
-      // ====================================
-      // INDUSTRIAL 4-PERIOD CALCULATION
-      // EMRC TOU is 3-period (off-peak / partial / peak). We map the project's
-      // 4 input buckets onto the EMRC 3 buckets:
-      //   off-peak (05–14)  = period1
-      //   partial  (14–17 + 23–05) = period2 + period4
-      //   peak     (17–23)  = period3
-      // ====================================
-      if (customer_type === 'Industrial') {
-        for (let mi = 0; mi < months.length; mi++) {
-          const month = months[mi];
-          const x1 = consumption[month];
-          const x2 = pvGenForMonth(mi);
+        // 5. Energy charges from sector tariff
+        const billBeforeEnergyJD = priceImportJD({
+          sector, monthlyKWh: load,
+          kwhByPeriod: { peak: Lp, partial: La, offPeak: Lo },
+          isTemporary: input.is_temporary,
+        });
+        const importEnergyJD = priceImportJD({
+          sector, monthlyKWh: importEnergy,
+          kwhByPeriod: { peak: Ip, partial: Ia, offPeak: Io },
+          isTemporary: input.is_temporary,
+        });
 
-          const y1 = x1 * period1_factors[month]; // 05–14
-          const y2 = x1 * period2_factors[month]; // 14–17
-          const y3 = x1 * period3_factors[month]; // 17–23
-          const y4 = x1 * period4_factors[month]; // 23–05
+        // 6. Add-ons (rural fils, fuel clause, TV, meter rent, GAM, waste)
+        const addOnsBefore = addOnsFor(load, mi);
+        const addOnsAfter  = addOnsFor(importEnergy, mi);
 
-          // M1 wheeling uses different TOU windows than the standard EMRC
-          // schedule (off-peak absorbs the 14–17 mid-afternoon hours).
-          const cons_tou =
-            mech === 'M1_net_value_offsite'
-              ? mapFourBucketToWheelingTOU(y1, y2, y3, y4)
-              : mapFourBucketToStandardTOU(y1, y2, y3, y4);
-          const bill_before_raw = priceMonthlyImport(x1, cons_tou);
+        // 7. PF surcharge — only for sectors that allow it
+        const pfSurchargeBefore =
+          sectorAllowsPFPenalty(sector) && input.power_factor < 0.88
+            ? powerFactorSurchargeJD(billBeforeEnergyJD, input.power_factor)
+            : 0;
+        const pfSurchargeAfter =
+          sectorAllowsPFPenalty(sector) && input.power_factor < 0.88
+            ? powerFactorSurchargeJD(importEnergyJD, input.power_factor)
+            : 0;
 
-          const before_final = finalizeBill(bill_before_raw, x1, mi);
-          total_cost_before += before_final.finalBill;
+        // 8. Bill BEFORE PV — energy + add-ons + PF surcharge, min-bill floor
+        const billBefore = applyMinimumBillJD(
+          billBeforeEnergyJD + addOnsBefore.totalJD + pfSurchargeBefore,
+          sector,
+        );
 
-          const z1 = x2 * sun_period1_factors[month];
-          const z2 = x2 * sun_period2_factors[month];
-          const z3 = x2 * sun_period3_factors[month];
-          const z4 = x2 * sun_period4_factors[month];
+        // 9. Export revenue — M3 zero-export and M5 legacy yield no JD revenue
+        const exportRevenueJD =
+          mech === 'M3_zero_export' || mech === 'M5_legacy_net_metering'
+            ? 0
+            : exportEnergy * exportRate;
 
-          const k1 = Math.min(z1 * pv_consume_period1[month], y1);
-          const k2 = Math.min(z2 * pv_consume_period2[month], y2);
-          const k3 = Math.min(z3 * pv_consume_period3[month], y3);
-          const k4 = Math.min(z4 * pv_consume_period4[month], y4);
+        // 10. Mechanism-specific net-billing logic
+        let billAfter: number;
+        let monthlyCreditUsed = 0;
+        let monthlyCreditGenerated = 0;
+        let m5Carry = 0;
+        let rawNetBill = 0;
 
-          const self_consumption = k1 + k2 + k3 + k4;
-          total_self_consumption += self_consumption;
-
-          const export1 = Math.max(0, z1 - k1);
-          const export2 = Math.max(0, z2 - k2);
-          const export3 = Math.max(0, z3 - k3);
-          const export4 = Math.max(0, z4 - k4);
-          const export_energy = export1 + export2 + export3 + export4;
-          total_export += export_energy;
-
-          const import1 = Math.max(0, y1 - k1);
-          const import2 = Math.max(0, y2 - k2);
-          const import3 = Math.max(0, y3 - k3);
-          const import4 = Math.max(0, y4 - k4);
-          const import_energy = import1 + import2 + import3 + import4;
-
-          const imp_tou =
-            mech === 'M1_net_value_offsite'
-              ? mapFourBucketToWheelingTOU(import1, import2, import3, import4)
-              : mapFourBucketToStandardTOU(import1, import2, import3, import4);
-          const import_cost = priceMonthlyImport(import_energy, imp_tou);
-          // M3 zero-export: any accidental export is NOT compensated.
-          // M5 legacy: export revenue is settled as kWh credit, not JD —
-          // handled by the legacy ledger below.
-          const export_revenue =
-            mech === 'M3_zero_export' || mech === 'M5_legacy_net_metering'
-              ? 0
-              : calcExportRevenueJD(export_energy);
-          total_export_revenue += export_revenue;
-
-          const raw_net_bill = import_cost - export_revenue;
-          const ledger = applyCreditLedger(raw_net_bill);
-
-          // Add-ons + min-bill + PF surcharge layered on top of the (already
-          // credited) energy bill component.
-          const after_final = finalizeBill(ledger.bill_after_credits, import_energy, mi);
-          total_cost_after += after_final.finalBill;
-
-          monthly_data.push({
-            month,
-            consumption: x1,
-            generation: x2,
-            generation_day: z1 + z2,
-            generation_evening: z3,
-            generation_night: z4,
-            self_consumption,
-            export: export_energy,
-            import: import_energy,
-            bill_before: before_final.finalBill,
-            bill_after: after_final.finalBill,
-            raw_bill_after: raw_net_bill,
-            import_cost,
-            savings: before_final.finalBill - after_final.finalBill,
-            export_revenue,
-            monthly_credit_used: ledger.monthly_credit_used,
-            monthly_credit_generated: ledger.monthly_credit_generated,
-            running_credit_balance,
+        if (mech === 'M5_legacy_net_metering') {
+          // True 1:1 kWh netting with year-end forfeiture and ~80% credit haircut
+          const m5 = legacyNetMeteringMonthly({
+            importsKWh: importEnergy,
+            exportsKWh: exportEnergy,
+            retailTariffJDPerKWh: load > 0 ? billBeforeEnergyJD / load : 0,
+            exportHaircut: input.legacy_export_haircut,
+            fuelClauseFils: 0, // included in retailTariffJDPerKWh proxy
+            priorCarryKWh: runningCarryKWh,
           });
+          m5Carry = m5.carryKWh;
+          runningCarryKWh = m5.carryKWh;
+          rawNetBill = m5.invoiceJD - 0; // no JD export credit in M5
+          // Add-ons & PF still apply
+          billAfter = applyMinimumBillJD(
+            m5.invoiceJD + addOnsAfter.totalJD + pfSurchargeAfter,
+            sector,
+          );
+        } else {
+          // M1/M2/M3/M4: monetary settlement
+          rawNetBill = importEnergyJD - exportRevenueJD;
+          // Credit ledger (M2/M1 monthly carry; M3 has no exports so no credit;
+          // M4 is BASS — handled the same as M2 here for credit flow).
+          let billAfterCreditsEnergyJD = 0;
+          if (rawNetBill < 0) {
+            monthlyCreditGenerated = -rawNetBill;
+            runningCreditJD += monthlyCreditGenerated;
+            billAfterCreditsEnergyJD = 0;
+          } else if (runningCreditJD > 0) {
+            if (runningCreditJD >= rawNetBill) {
+              monthlyCreditUsed = rawNetBill;
+              runningCreditJD -= rawNetBill;
+              billAfterCreditsEnergyJD = 0;
+              netBillingSavings += rawNetBill;
+            } else {
+              monthlyCreditUsed = runningCreditJD;
+              billAfterCreditsEnergyJD = rawNetBill - runningCreditJD;
+              netBillingSavings += runningCreditJD;
+              runningCreditJD = 0;
+            }
+          } else {
+            billAfterCreditsEnergyJD = rawNetBill;
+          }
+          billAfter = applyMinimumBillJD(
+            billAfterCreditsEnergyJD + addOnsAfter.totalJD + pfSurchargeAfter,
+            sector,
+          );
         }
-      } else {
-        // ====================================
-        // RESIDENTIAL 3-PERIOD CALCULATION
-        // EMRC residential is tiered (not TOU) so the bucket split affects
-        // only self-consumption/export, not the per-kWh rate.
-        // ====================================
-        for (let mi = 0; mi < months.length; mi++) {
-          const month = months[mi];
-          const x1 = consumption[month];
-          const x2 = pvGenForMonth(mi);
 
-          const y1 = x1 * day_factors[month];
-          const y2 = x1 * evening_factors[month];
-          const y3 = x1 * night_factors[month];
-          const total_cons = y1 + y2 + y3;
+        // Accumulators
+        totalCostBefore += billBefore;
+        totalCostAfter  += billAfter;
+        totalExportRevenue += exportRevenueJD;
+        totalSelfConsumption += SC;
+        totalExport += exportEnergy;
+        totalImport += importEnergy;
 
-          const bill_before_raw = priceMonthlyImport(total_cons);
-          const before_final = finalizeBill(bill_before_raw, total_cons, mi);
-          total_cost_before += before_final.finalBill;
-
-          const z1 = x2 * sun_peak_factors[month];
-          const z2 = x2 * sun_medium_factors[month];
-          const z3 = x2 * sun_low_factors[month];
-
-          const k1 = Math.min(z1 * pv_consume_day[month], y1);
-          const k2 = Math.min(z2 * pv_consume_evening[month], y2);
-          const k3 = Math.min(z3 * pv_consume_night[month], y3);
-
-          const self_consumption = k1 + k2 + k3;
-          total_self_consumption += self_consumption;
-
-          const export_energy =
-            Math.max(0, z1 - k1) + Math.max(0, z2 - k2) + Math.max(0, z3 - k3);
-          total_export += export_energy;
-
-          const import_energy =
-            Math.max(0, y1 - k1) + Math.max(0, y2 - k2) + Math.max(0, y3 - k3);
-
-          const import_cost = import_energy > 0 ? priceMonthlyImport(import_energy) : 0;
-          // M3 zero-export and M5 legacy NEM monetary-side both yield no
-          // JD export revenue (M5 is settled as kWh credit elsewhere).
-          const export_revenue =
-            mech === 'M3_zero_export' || mech === 'M5_legacy_net_metering'
-              ? 0
-              : calcExportRevenueJD(export_energy);
-          total_export_revenue += export_revenue;
-
-          const raw_net_bill = import_cost - export_revenue;
-          const ledger = applyCreditLedger(raw_net_bill);
-          const after_final = finalizeBill(ledger.bill_after_credits, import_energy, mi);
-          total_cost_after += after_final.finalBill;
-
-          monthly_data.push({
-            month,
-            consumption: x1,
-            generation: x2,
-            generation_day: z1,
-            generation_evening: z2,
-            generation_night: z3,
-            self_consumption,
-            export: export_energy,
-            import: import_energy,
-            bill_before: before_final.finalBill,
-            bill_after: after_final.finalBill,
-            raw_bill_after: raw_net_bill,
-            import_cost,
-            savings: before_final.finalBill - after_final.finalBill,
-            export_revenue,
-            monthly_credit_used: ledger.monthly_credit_used,
-            monthly_credit_generated: ledger.monthly_credit_generated,
-            running_credit_balance,
-          });
-        }
+        monthly.push({
+          month: monthKey,
+          consumption: load,
+          generation: gen,
+          // Backward-compat fields (no longer the source of truth)
+          generation_day: Go,
+          generation_evening: Gp,
+          generation_night: Ga,
+          self_consumption: SC,
+          export: exportEnergy,
+          import: importEnergy,
+          bill_before: billBefore,
+          bill_after: billAfter,
+          raw_bill_after: rawNetBill,
+          import_cost: importEnergyJD + addOnsAfter.totalJD,
+          savings: billBefore - billAfter,
+          export_revenue: exportRevenueJD,
+          monthly_credit_used: monthlyCreditUsed,
+          monthly_credit_generated: monthlyCreditGenerated,
+          running_credit_balance: runningCreditJD,
+          // TOU breakdown for the technical report
+          tou: { Lp, La, Lo, Gp, Ga, Go, SCp, SCa, SCo, Ep, Ea, Eo, Ip, Ia, Io },
+          // Add-on breakdown (transparent itemisation)
+          add_ons_after: addOnsAfter,
+          m5_carry_kwh: m5Carry || undefined,
+        });
       }
 
-      // Annual credit reset (Bylaw 58/2024 — single highest-stakes open
-      // question per the engine spec). Default 'forfeit_year_end' matches
-      // legacy DISCO practice. Apply at end of December.
-      const reset = applyAnnualReset(running_credit_balance, annual_reset_policy as AnnualResetPolicy);
-      const forfeited_credit_jd = reset.forfeitedJD;
-      const cashed_out_credit_jd = reset.cashedOutJD;
-      running_credit_balance = reset.balanceAfter;
-      // Forfeiture is a loss to the prosumer — surfaces as additional cost
-      // (the credit they earned but lost). Cash-out is a refund (negative cost).
-      total_cost_after += forfeited_credit_jd - cashed_out_credit_jd;
+      // Year-end reset
+      const reset = applyAnnualReset(runningCreditJD, input.annual_reset_policy as AnnualResetPolicy);
+      const forfeitedCreditJD = reset.forfeitedJD;
+      const cashedOutCreditJD = reset.cashedOutJD;
+      runningCreditJD = reset.balanceAfter;
+      totalCostAfter += forfeitedCreditJD - cashedOutCreditJD;
 
-      // Annual grid-service fee (Bylaw 58/2024 §V) — JD/kWac × inverter size
-      // × 12. Sector- and mechanism-dependent; M4 Buy-All/Sell-All and M5
-      // legacy NEM are exempt.
-      const grid_service_fee_monthly_jd = gridServiceFeeJD({
+      // Annual grid-service fee (Bylaw 58/2024 §V)
+      const gridFeeMonthly = gridServiceFeeJD({
         sector,
-        mechanism: mech,
-        inverterKWac: inverter_kwac,
-        postBylawApplication: post_bylaw_application,
-        isWelfareBeneficiary: is_welfare_beneficiary,
+        mechanism: mech as NetBillingMechanism,
+        inverterKWac: input.inverter_kwac,
+        postBylawApplication: input.post_bylaw_application,
+        isWelfareBeneficiary: input.is_welfare_beneficiary,
       });
-      const grid_service_fee_annual_jd = grid_service_fee_monthly_jd * 12;
-      total_cost_after += grid_service_fee_annual_jd;
+      const gridFeeAnnual = gridFeeMonthly * 12;
+      totalCostAfter += gridFeeAnnual;
 
-      const annual_savings = total_cost_before - total_cost_after;
-      
+      const annualSavings = totalCostBefore - totalCostAfter;
+      const annualGeneration = input.monthly_pv_generation.reduce((s, v) => s + v, 0);
+      const dcAcRatio = sectorClass === 'residential' ? 1.5 : 1.2;
+
       const results: CalculationResults = {
-        monthly_data,
+        monthly_data: monthly,
         annual_summary: {
-          total_consumption: total_annual_consumption,
-          pv_size: monthly_pv_generation_override
-            ? annual_pv_generation / 12
-            : monthly_pv_generation,
-          inverter_size,
-          annual_generation: annual_pv_generation,
-          total_self_consumption,
-          total_export,
-          cost_before: total_cost_before,
-          cost_after: total_cost_after,
-          annual_savings,
-          export_revenue: total_export_revenue,
-          efficiency: efficiency / 100,
-          export_tariff: effective_export_rate_jd,
-          // NET BILLING ENHANCEMENTS
-          net_billing_savings: total_net_billing_savings,
-          final_credit_balance: running_credit_balance,
-          grid_service_fee_jd_per_month: grid_service_fee_monthly_jd,
-          grid_service_fee_jd_annual: grid_service_fee_annual_jd,
+          total_consumption: annualConsumption,
+          pv_size: annualGeneration / 12,
+          inverter_size: input.inverter_kwac,
+          annual_generation: annualGeneration,
+          total_self_consumption: totalSelfConsumption,
+          total_export: totalExport,
+          cost_before: totalCostBefore,
+          cost_after: totalCostAfter,
+          annual_savings: annualSavings,
+          export_revenue: totalExportRevenue,
+          efficiency: input.efficiency / 100,
+          export_tariff: exportRate,
+          net_billing_savings: netBillingSavings,
+          final_credit_balance: runningCreditJD,
+          grid_service_fee_jd_per_month: gridFeeMonthly,
+          grid_service_fee_jd_annual: gridFeeAnnual,
           sector,
           sector_label: sectorTariff.label,
-          net_billing_mechanism,
-          // PV sizing (EMRC standard yield + DC:AC + residential caps)
-          kwp_dc: final_kwp_dc,
-          pv_design_active: !!monthly_pv_generation_override,
-          dc_ac_ratio: sectorClass === 'residential' ? 1.5 : 1.2,
+          net_billing_mechanism: mech,
+          kwp_dc: input.kwp_dc,
+          dc_ac_ratio: dcAcRatio,
           specific_yield_kwh_per_kwp_year: SPECIFIC_YIELD_KWH_PER_KWP_MONTH * 12,
-          inverter_cap_kwac: capped.cap ?? null,
-          inverter_cap_binding: capped.capped,
-          mechanism_cap_fraction: capFraction,
-          loses_residential_subsidy: loses_subsidy,
+          inverter_cap_kwac: sectorClass === 'residential'
+            ? (input.connection_phase === 3 ? 10 : 3.6)
+            : null,
+          inverter_cap_binding: false, // capped on the client before send
+          mechanism_cap_fraction: mechanismGenerationCapFraction(mech, sectorClass),
+          loses_residential_subsidy: losesSubsidy,
           eligibility_status: eligibility,
-          annual_reset_policy,
-          forfeited_credit_jd,
-          cashed_out_credit_jd,
-          total_savings_with_net_billing: annual_savings + total_net_billing_savings
+          annual_reset_policy: input.annual_reset_policy,
+          forfeited_credit_jd: forfeitedCreditJD,
+          cashed_out_credit_jd: cashedOutCreditJD,
+          pv_design_active: true,
         },
-        net_billing_enabled: true
+        net_billing_enabled: true,
       };
-      
+
       res.json(results);
-      
     } catch (error) {
       if (error instanceof z.ZodError) {
-        res.status(400).json({ 
-          error: "Invalid calculation parameters", 
-          details: error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ')
+        res.status(400).json({
+          error: "Invalid calculation parameters",
+          details: error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', '),
         });
       } else {
-        res.status(400).json({ error: "Calculation failed", details: error });
+        res.status(400).json({ error: "Calculation failed", details: String(error) });
       }
     }
   });
 
-  // NPV/ROI calculation endpoint (EXACT PyQt6 logic preserved)
+  // ---------------------------------------------------------------------
+  // POST /api/calculate-npv — unchanged from legacy
+  // ---------------------------------------------------------------------
   app.post("/api/calculate-npv", async (req, res) => {
     try {
       const {
         annual_savings = 1000,
         system_cost = 5000,
         discount_rate = 0.05,
-        project_life = 25
+        project_life = 25,
       } = req.body;
 
-      // EXACT NPV calculation from PyQt6
-      let npv = -system_cost; // Initial investment
-      
+      let npv = -system_cost;
       for (let year = 1; year <= project_life; year++) {
-        // Account for degradation - EXACT formula
-        const degradation_factor = Math.pow(1 - 0.005, year); // 0.5% annual degradation
-        const yearly_savings = annual_savings * degradation_factor;
-        
-        // Discount to present value - EXACT formula
-        const pv_savings = yearly_savings / Math.pow(1 + discount_rate, year);
-        npv += pv_savings;
+        const deg = Math.pow(1 - 0.005, year);
+        const pv = (annual_savings * deg) / Math.pow(1 + discount_rate, year);
+        npv += pv;
       }
-
-      // EXACT IRR calculation (simplified)
-      const simple_return = annual_savings / system_cost;
-      const irr = Math.min(simple_return * 100, 50); // Cap at reasonable value
-      
-      // Payback period - EXACT formula
+      const irr = Math.min((annual_savings / system_cost) * 100, 50);
       const payback = annual_savings > 0 ? system_cost / annual_savings : 999;
-      
-      // LCOE calculation - EXACT formula
-      const annual_generation = 1000; // kWh - simplified
-      const lcoe = system_cost / (annual_generation * project_life);
-
-      res.json({
-        npv,
-        irr,
-        payback,
-        lcoe
-      });
-
+      const annualGen = 1000;
+      const lcoe = system_cost / (annualGen * project_life);
+      res.json({ npv, irr, payback, lcoe });
     } catch (error) {
-      res.status(400).json({ error: "NPV calculation failed", details: error });
+      res.status(400).json({ error: "NPV calculation failed", details: String(error) });
     }
   });
 }

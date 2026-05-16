@@ -25,7 +25,7 @@ import HelpSection from '@/components/HelpSection';
 import UserManagement from '@/pages/user-management';
 import { useAuth } from '@/hooks/use-auth';
 
-type ActiveTab = 'designer' | 'pv-design' | 'dashboard' | 'analysis' | 'comparison' | 'help' | 'users';
+type ActiveTab = 'designer' | 'dashboard' | 'analysis' | 'comparison' | 'help' | 'users';
 
 export default function SolarCalculatorApp() {
   const { theme, toggleTheme } = useTheme();
@@ -94,19 +94,19 @@ export default function SolarCalculatorApp() {
                       <div className="space-y-6">
                         <div className="flex items-center justify-between">
                           <h2 className="text-2xl font-semibold">System Designer</h2>
-                          <Button 
+                          <Button
                             onClick={calculate}
                             disabled={isCalculating}
                             className="flex items-center gap-2"
                             data-testid="button-calculate"
                           >
                             <Play className="h-4 w-4" />
-                            {isCalculating ? 'Calculating...' : 'Calculate System'}
+                            {isCalculating ? 'Calculating…' : 'Calculate'}
                           </Button>
                         </div>
 
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                          {/* Left Panel - Inputs */}
+                          {/* Left: customer + consumption */}
                           <div className="space-y-6">
                             <CustomerGridSelection
                               customerType={state.customerType}
@@ -119,7 +119,7 @@ export default function SolarCalculatorApp() {
                               consumption={state.consumption}
                               onChange={(consumption) => updateField('consumption', consumption)}
                             />
-                            
+
                             <SystemConfiguration
                               efficiency={state.efficiency}
                               degradation={state.degradation}
@@ -138,22 +138,21 @@ export default function SolarCalculatorApp() {
                             />
                           </div>
 
-                          {/* Right Panel - Live Preview */}
+                          {/* Right: PV Design (Quick Quote / Detailed) + gauges */}
                           <div className="space-y-6">
-                            {/* Gauges */}
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                               <CircularGauge
-                                title="Power Generation"
-                                value={results?.annual_summary.pv_size || 0}
-                                max={1000}
+                                title="Annual PV Yield"
+                                value={results?.annual_summary.annual_generation || 0}
+                                max={20000}
                                 unit="kWh"
                                 variant="chart-1"
                               />
                               <CircularGauge
-                                title="System Efficiency"
-                                value={state.efficiency}
-                                max={100}
-                                unit="%"
+                                title="Self-consumption"
+                                value={results?.annual_summary.total_self_consumption || 0}
+                                max={20000}
+                                unit="kWh"
                                 variant="chart-2"
                               />
                               <CircularGauge
@@ -165,52 +164,13 @@ export default function SolarCalculatorApp() {
                               />
                             </div>
 
-                            {/* Time Period Parameters Section - Modular Design */}
-                            <TimeParametersSection
-                              customerType={state.customerType}
-                              gridConnection={state.gridConnection}
-                              // Consumption Period Factors
-                              dayFactors={state.dayFactors}
-                              eveningFactors={state.eveningFactors}
-                              nightFactors={state.nightFactors}
-                              // Industrial Period Factors  
-                              period1Factors={state.period1Factors}
-                              period2Factors={state.period2Factors}
-                              period3Factors={state.period3Factors}
-                              period4Factors={state.period4Factors}
-                              // Solar Generation Factors - Residential
-                              sunPeakFactors={state.sunPeakFactors}
-                              sunMediumFactors={state.sunMediumFactors}
-                              sunLowFactors={state.sunLowFactors}
-                              // Solar Generation Factors - Industrial
-                              sunPeriod1Factors={state.sunPeriod1Factors}
-                              sunPeriod2Factors={state.sunPeriod2Factors}
-                              sunPeriod3Factors={state.sunPeriod3Factors}
-                              sunPeriod4Factors={state.sunPeriod4Factors}
-                              // PV Self-Consumption Factors - Residential
-                              pvConsumeDay={state.pvConsumeDay}
-                              pvConsumeEvening={state.pvConsumeEvening}
-                              pvConsumeNight={state.pvConsumeNight}
-                              // PV Self-Consumption Factors - Industrial
-                              pvConsumePeriod1={state.pvConsumePeriod1}
-                              pvConsumePeriod2={state.pvConsumePeriod2}
-                              pvConsumePeriod3={state.pvConsumePeriod3}
-                              pvConsumePeriod4={state.pvConsumePeriod4}
-                              // Update handler
-                              updateField={updateField}
+                            <PVDesignPanel
+                              state={state.pvDesign}
+                              onChange={(pv) => updateField('pvDesign', pv)}
                             />
-
-
                           </div>
                         </div>
                       </div>
-                    )}
-
-                    {activeTab === 'pv-design' && (
-                      <PVDesignPanel
-                        state={state.pvDesign}
-                        onChange={(pv) => updateField('pvDesign', pv)}
-                      />
                     )}
 
                     {activeTab === 'dashboard' && (

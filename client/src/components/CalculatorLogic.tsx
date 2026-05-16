@@ -26,9 +26,16 @@ import {
 import {
   quickQuoteYield,
   calculatePVYield,
+  JORDAN_REGIONS,
   type YieldResult,
+  type JordanRegion,
+  type ClimateZone,
 } from '@shared/jordanPVDesign';
 import { type PVDesignState, defaultPVDesignState } from '@/components/PVDesignPanel';
+
+const JORDAN_REGIONS_FOR_ZONE: Record<JordanRegion, ClimateZone> = Object.fromEntries(
+  Object.entries(JORDAN_REGIONS).map(([id, r]) => [id, r.zone]),
+) as Record<JordanRegion, ClimateZone>;
 
 /**
  * Map the project's grid-connection labels onto the Bylaw 58/2024 + legacy
@@ -589,149 +596,91 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
     return results;
   }, [createTariffCalculator, calculateTaxes, calculateExportTariff]);
 
-  // Calculation mutation using EXACT PyQt6 formulas preserved in backend
+  // Calculation mutation — unified accurate pipeline. Always runs the PV
+  // physics engine (Quick Quote or Detailed Engineering) and sends a single
+  // POST body to /api/calculate. No more dual paths, no more invented
+  // self-consumption percentages.
   const calculateMutation = useMutation({
-    mutationFn: async (calculationData: CalculatorState): Promise<CalculationResults> => {
-      // Handle Buy-All Sell-All calculations locally (frontend-only)
-      if (calculationData.gridConnection === 'Buy all sell all') {
-        return calculateBuyAllSellAll(calculationData);
-      }
-      
-      let requestBody;
+    mutationFn: async (s: CalculatorState): Promise<CalculationResults> => {
+      // 1. Run PV physics engine — every calc has a sized PV system
+      const pvd = s.pvDesign;
+      const yr = pvd.tier === 'quick'
+        ? quickQuoteYield({
+            region: pvd.region,
+            sizingMode: pvd.sizingMode,
+            sizeValue: pvd.sizeValue,
+            systemType: pvd.systemType,
+            prOverride: pvd.prOverride ?? undefined,
+          })
+        : calculatePVYield(pvd.detailed);
 
-      // If the PV Design module is enabled, run its physics engine here and
-      // pipe its monthly kWh / inverter kWac into the backend so the billing
-      // pipeline uses the physics-based generation instead of the
-      // consumption-based X2 = consumption/12 fallback.
-      let pvDesignOverride: { monthlyKWh: number[]; inverterKWac: number; kwpDC: number; annualKWh: number } | null = null;
-      if (calculationData.pvDesign?.enabled) {
-        const pvd = calculationData.pvDesign;
-        const yr: YieldResult = pvd.tier === 'quick'
-          ? quickQuoteYield({
-              region: pvd.region,
-              sizingMode: pvd.sizingMode,
-              sizeValue: pvd.sizeValue,
-              systemType: pvd.systemType,
-              prOverride: pvd.prOverride ?? undefined,
-            })
-          : calculatePVYield(pvd.detailed);
-        const inverterKWac =
-          pvd.tier === 'detailed'
-            ? pvd.detailed.inverterKWac
-            : (pvd.sizingMode === 'kWp' ? pvd.sizeValue : pvd.sizeValue / 5.5)
-              / (pvd.systemType === 'res-rooftop' ? 1.5 : 1.2);
-        pvDesignOverride = {
-          monthlyKWh: yr.monthlyKWh_year1,
-          inverterKWac,
-          kwpDC: yr.lossBreakdown.dcKWp,
-          annualKWh: yr.annualKWh_year1,
-        };
-        console.log('☀️ PV DESIGN ENABLED →', {
-          tier: pvd.tier,
-          annual_kWh: yr.annualKWh_year1.toFixed(0),
-          inverter_kWac: inverterKWac.toFixed(2),
-          specific_yield: yr.specificYield_kWhPerKWpYear.toFixed(0),
-        });
-      }
+      const dcKWp = yr.lossBreakdown.dcKWp;
+      const dcAc = pvd.systemType === 'res-rooftop' ? 1.5 : 1.2;
+      const inverterKWac = pvd.tier === 'detailed'
+        ? pvd.detailed.inverterKWac
+        : dcKWp / dcAc;
 
-      // Map parameters based on customer type and grid connection
-      if (calculationData.customerType === 'Industrial' && calculationData.gridConnection === 'Net billing') {
-        console.log('🏭 INDUSTRIAL CALCULATION: Sending native 4-period data to backend...');
-        
-        // Send native 4-period Industrial factors to backend (no compression)
-        requestBody = {
-          consumption: calculationData.consumption,
-          efficiency: calculationData.efficiency,
-          tariff_supported: calculationData.tariffSupported,
-          export_tariff: calculationData.exportTariff,
-          customer_type: 'Industrial',
-          // 4-period consumption factors
-          period1_factors: calculationData.period1Factors,  // Off Peak (5-14) - y1
-          period2_factors: calculationData.period2Factors,  // Half Peak (14-17) - y2
-          period3_factors: calculationData.period3Factors,  // Peak (17-23) - y3
-          period4_factors: calculationData.period4Factors,  // Half Peak (23-5) - y4
-          
-          // 4-period solar generation factors
-          sun_period1_factors: calculationData.sunPeriod1Factors,  // Off Peak (5-14)
-          sun_period2_factors: calculationData.sunPeriod2Factors,  // Half Peak (14-17)
-          sun_period3_factors: calculationData.sunPeriod3Factors,  // Peak (17-23)
-          sun_period4_factors: calculationData.sunPeriod4Factors,  // Half Peak (23-5)
-          
-          // 4-period PV self-consumption factors
-          pv_consume_period1: calculationData.pvConsumePeriod1,  // Off Peak (5-14) - k1
-          pv_consume_period2: calculationData.pvConsumePeriod2,  // Half Peak (14-17) - k2
-          pv_consume_period3: calculationData.pvConsumePeriod3,  // Peak (17-23) - k3
-          pv_consume_period4: calculationData.pvConsumePeriod4,  // Half Peak (23-5) - k4
-          
-          // Industrial tariff configuration (from state)
-          industrial_tariffs: calculationData.industrialTariffs,
-          // Jordan EMRC 2025 sector dispatch + Bylaw 58/2024 mechanism
-          sector: defaultSectorFor('Industrial'),
-          net_billing_mechanism: mechanismFor(calculationData.gridConnection),
-          // PF defaults to 0.90 → no penalty (NEPCO §I.1.d threshold = 0.88).
-          power_factor: 0.9,
-          ...(pvDesignOverride && {
-            monthly_pv_generation_override: pvDesignOverride.monthlyKWh,
-            inverter_kwac: pvDesignOverride.inverterKWac,
-            kwp_dc_override: pvDesignOverride.kwpDC,
-          }),
-        };
-
-        console.log('🏭 INDUSTRIAL CALCULATION: Sent native 4-period data (no compression)');
+      // 2. Resolve sector from customer type + tariff
+      let sector: SectorCode;
+      if (s.customerType === 'Residential') {
+        sector = s.tariffSupported ? 'A1_subsidized' : 'A2_unsubsidized';
+      } else if (s.customerType === 'Industrial') {
+        sector = 'C2_medium_industrial';
+      } else if (s.customerType === 'Commercial') {
+        sector = 'B1_commercial';
+      } else if (s.customerType === 'Hotels') {
+        sector = 'D1_hotel_post2008';
+      } else if (s.customerType === 'Hospitals') {
+        sector = 'E1_private_hospital';
+      } else if (s.customerType === 'Agriculture') {
+        sector = 'F1_agri_std';
       } else {
-        // Default Residential + Net Billing parameters.
-        // Sector is A1_subsidized when tariffSupported, else A2_unsubsidized.
-        const residentialSector: SectorCode = calculationData.tariffSupported
-          ? 'A1_subsidized'
-          : 'A2_unsubsidized';
-        requestBody = {
-          consumption: calculationData.consumption,
-          efficiency: calculationData.efficiency,
-          tariff_supported: calculationData.tariffSupported,
-          export_tariff: calculationData.exportTariff,
-          day_factors: calculationData.dayFactors,
-          evening_factors: calculationData.eveningFactors,
-          night_factors: calculationData.nightFactors,
-          sun_peak_factors: calculationData.sunPeakFactors,
-          sun_medium_factors: calculationData.sunMediumFactors,
-          sun_low_factors: calculationData.sunLowFactors,
-          pv_consume_day: calculationData.pvConsumeDay,
-          pv_consume_evening: calculationData.pvConsumeEvening,
-          pv_consume_night: calculationData.pvConsumeNight,
-          sector: residentialSector,
-          net_billing_mechanism: mechanismFor(calculationData.gridConnection),
-          power_factor: 0.9,
-          ...(pvDesignOverride && {
-            monthly_pv_generation_override: pvDesignOverride.monthlyKWh,
-            inverter_kwac: pvDesignOverride.inverterKWac,
-            kwp_dc_override: pvDesignOverride.kwpDC,
-          }),
-        };
-
-        console.log('Calculating with RESIDENTIAL parameters:', {
-          customerType: calculationData.customerType,
-          gridConnection: calculationData.gridConnection,
-          sector: residentialSector,
-        });
+        sector = 'A1_subsidized';
       }
-      
+
+      // 3. Build the unified request body
+      const requestBody = {
+        consumption: s.consumption,
+        monthly_pv_generation: yr.monthlyKWh_year1,
+        inverter_kwac: inverterKWac,
+        kwp_dc: dcKWp,
+        sector,
+        customer_type: s.customerType,
+        net_billing_mechanism: mechanismFor(s.gridConnection),
+        zone: JORDAN_REGIONS_FOR_ZONE[pvd.region],
+        export_tariff: s.exportTariff,
+        efficiency: s.efficiency,
+        power_factor: 0.9,
+        connection_phase: pvd.systemType === 'res-rooftop' ? 1 : 3,
+        meter_phase: pvd.systemType === 'res-rooftop' ? 1 : 3,
+      };
+
+      console.log('🔆 UNIFIED CALC →', {
+        sector,
+        mechanism: requestBody.net_billing_mechanism,
+        annualPV_kWh: yr.annualKWh_year1.toFixed(0),
+        inverter_kWac: inverterKWac.toFixed(2),
+        kWp_DC: dcKWp.toFixed(2),
+      });
+
       const response = await fetch('/api/calculate', {
         method: 'POST',
         body: JSON.stringify(requestBody),
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
       });
       if (!response.ok) {
-        throw new Error('Calculation failed');
+        const errBody = await response.text();
+        throw new Error(`Calculation failed: ${errBody}`);
       }
       return response.json();
     },
     onSuccess: (data: CalculationResults) => {
       setResults(data);
-      console.log('Calculation completed:', data.annual_summary);
+      console.log('✅ Calculation:', data.annual_summary);
     },
     onError: (error) => {
-      console.error('Calculation failed:', error);
-    }
+      console.error('❌ Calculation failed:', error);
+    },
   });
 
   const calculate = useCallback(() => {
