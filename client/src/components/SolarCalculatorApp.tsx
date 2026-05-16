@@ -18,6 +18,7 @@ import CircularGauge from '@/components/CircularGauge';
 import Dashboard from '@/components/Dashboard';
 import AnalysisSection from '@/components/AnalysisSection';
 import BeforeAfterResults from '@/components/BeforeAfterResults';
+import TechnicalReport from '@/components/TechnicalReport';
 import ComparisonSection from '@/components/ComparisonSection';
 import HelpSection from '@/components/HelpSection';
 import UserManagement from '@/pages/user-management';
@@ -85,6 +86,7 @@ export default function SolarCalculatorApp() {
           <main className="flex-1 overflow-hidden">
             <CalculatorLogic>
               {({ state, updateField, calculate, results, isCalculating }) => (
+                <>
                 <ScrollArea className="h-full">
                   <div className="p-6">
                     {activeTab === 'designer' && (
@@ -258,6 +260,19 @@ export default function SolarCalculatorApp() {
                     )}
                   </div>
                 </ScrollArea>
+                {/* Print-only technical report — hidden on screen, shown
+                    only when the user triggers Export (window.print).
+                    Mounted once at the root so it captures the latest
+                    results regardless of which tab is active. */}
+                <TechnicalReport
+                  results={results}
+                  customerType={state.customerType}
+                  gridConnection={state.gridConnection}
+                  consumption={state.consumption}
+                  efficiency={state.efficiency}
+                  degradation={state.degradation}
+                />
+                </>
               )}
             </CalculatorLogic>
           </main>
