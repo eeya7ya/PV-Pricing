@@ -5,7 +5,30 @@ import { z } from "zod";
 
 // Customer Types and Grid Connection Methods
 export const CUSTOMER_TYPES = ['Residential', 'Industrial', 'Commercial', 'Hotels', 'Hospitals', 'Agriculture'] as const;
+// Grid connection method = Bylaw 58/2024 four-mechanism enumeration.
+//   'Net billing'         → Mechanism 2 (Net Value On-site)
+//   'wheeling'            → Mechanism 1 (Net Value Off-site)
+//   'Zero export'         → Mechanism 3 (Zero Export, battery allowed)
+//   'Buy all sell all'    → Mechanism 4 (separate meter; no grid fee)
 export const GRID_CONNECTION_METHODS = ['Net billing', 'wheeling', 'Zero export', 'Buy all sell all'] as const;
+
+// Re-export Jordan tariff sector codes so the calculator/UI can reference them.
+export {
+  type SectorCode,
+  type CustomerClass,
+  type NetBillingMechanism,
+  type WasteClass,
+  SECTOR_TARIFFS,
+  SECTOR_TO_CLASS,
+  defaultSectorFor,
+  RURAL_FILS_PER_KWH,
+  TV_FEE_JD_PER_MONTH,
+  METER_RENT_JD,
+  MIN_BILL_JD,
+  FUEL_CLAUSE_FILS_BY_MONTH,
+  EV_PUBLIC_OPERATOR_COMMISSION_FILS,
+  SUBSIDY_LOSS_TRIGGER_KW,
+} from './jordanTariffs';
 
 // Tariff Categories for Dynamic System
 export const TARIFF_CATEGORIES = ['Residential', 'Industrial', 'Custom'] as const;
@@ -126,7 +149,14 @@ export const AnnualSummarySchema = z.object({
   // Net billing system fields
   net_billing_savings: z.number().optional(),
   final_credit_balance: z.number().optional(),
-  total_savings_with_net_billing: z.number().optional()
+  total_savings_with_net_billing: z.number().optional(),
+  // Bylaw 58/2024 grid service fee
+  grid_service_fee_jd_per_month: z.number().optional(),
+  grid_service_fee_jd_annual: z.number().optional(),
+  // Jordan EMRC 2025 sector dispatch metadata
+  sector: z.string().optional(),
+  sector_label: z.string().optional(),
+  net_billing_mechanism: z.string().optional()
 });
 
 
