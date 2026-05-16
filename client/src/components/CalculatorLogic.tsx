@@ -23,6 +23,12 @@ import {
   type SectorCode,
   type NetBillingMechanism,
 } from '@shared/jordanTariffs';
+import {
+  quickQuoteYield,
+  calculatePVYield,
+  type YieldResult,
+} from '@shared/jordanPVDesign';
+import { type PVDesignState, defaultPVDesignState } from '@/components/PVDesignPanel';
 
 /**
  * Map the project's grid-connection labels onto the Bylaw 58/2024 + legacy
@@ -92,6 +98,11 @@ interface CalculatorState {
   // Dynamic Tariff Configuration
   tariffType: string;
   tariffConfig: TariffConfig;
+
+  // PV design module (Tier 1 Quick Quote / Tier 2 Detailed Engineering).
+  // When `pvDesign.enabled` is true, the physics engine's monthly kWh vector
+  // overrides the consumption-based PV generation in the billing pipeline.
+  pvDesign: PVDesignState;
 }
 
 interface CalculatorLogicProps {
@@ -233,7 +244,9 @@ const initialState: CalculatorState = {
   tariffConfig: (() => {
     const { tariff_config } = applyTariffPreset('residential:tiered');
     return tariff_config;
-  })()
+  })(),
+
+  pvDesign: defaultPVDesignState(),
 };
 
 export default function CalculatorLogic({ children }: CalculatorLogicProps) {
@@ -585,7 +598,42 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
       }
       
       let requestBody;
-      
+
+      // If the PV Design module is enabled, run its physics engine here and
+      // pipe its monthly kWh / inverter kWac into the backend so the billing
+      // pipeline uses the physics-based generation instead of the
+      // consumption-based X2 = consumption/12 fallback.
+      let pvDesignOverride: { monthlyKWh: number[]; inverterKWac: number; kwpDC: number; annualKWh: number } | null = null;
+      if (calculationData.pvDesign?.enabled) {
+        const pvd = calculationData.pvDesign;
+        const yr: YieldResult = pvd.tier === 'quick'
+          ? quickQuoteYield({
+              region: pvd.region,
+              sizingMode: pvd.sizingMode,
+              sizeValue: pvd.sizeValue,
+              systemType: pvd.systemType,
+              prOverride: pvd.prOverride ?? undefined,
+            })
+          : calculatePVYield(pvd.detailed);
+        const inverterKWac =
+          pvd.tier === 'detailed'
+            ? pvd.detailed.inverterKWac
+            : (pvd.sizingMode === 'kWp' ? pvd.sizeValue : pvd.sizeValue / 5.5)
+              / (pvd.systemType === 'res-rooftop' ? 1.5 : 1.2);
+        pvDesignOverride = {
+          monthlyKWh: yr.monthlyKWh_year1,
+          inverterKWac,
+          kwpDC: yr.lossBreakdown.dcKWp,
+          annualKWh: yr.annualKWh_year1,
+        };
+        console.log('☀️ PV DESIGN ENABLED →', {
+          tier: pvd.tier,
+          annual_kWh: yr.annualKWh_year1.toFixed(0),
+          inverter_kWac: inverterKWac.toFixed(2),
+          specific_yield: yr.specificYield_kWhPerKWpYear.toFixed(0),
+        });
+      }
+
       // Map parameters based on customer type and grid connection
       if (calculationData.customerType === 'Industrial' && calculationData.gridConnection === 'Net billing') {
         console.log('🏭 INDUSTRIAL CALCULATION: Sending native 4-period data to backend...');
@@ -622,6 +670,11 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
           net_billing_mechanism: mechanismFor(calculationData.gridConnection),
           // PF defaults to 0.90 → no penalty (NEPCO §I.1.d threshold = 0.88).
           power_factor: 0.9,
+          ...(pvDesignOverride && {
+            monthly_pv_generation_override: pvDesignOverride.monthlyKWh,
+            inverter_kwac: pvDesignOverride.inverterKWac,
+            kwp_dc_override: pvDesignOverride.kwpDC,
+          }),
         };
 
         console.log('🏭 INDUSTRIAL CALCULATION: Sent native 4-period data (no compression)');
@@ -648,6 +701,11 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
           sector: residentialSector,
           net_billing_mechanism: mechanismFor(calculationData.gridConnection),
           power_factor: 0.9,
+          ...(pvDesignOverride && {
+            monthly_pv_generation_override: pvDesignOverride.monthlyKWh,
+            inverter_kwac: pvDesignOverride.inverterKWac,
+            kwp_dc_override: pvDesignOverride.kwpDC,
+          }),
         };
 
         console.log('Calculating with RESIDENTIAL parameters:', {

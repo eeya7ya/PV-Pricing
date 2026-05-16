@@ -19,12 +19,13 @@ import Dashboard from '@/components/Dashboard';
 import AnalysisSection from '@/components/AnalysisSection';
 import BeforeAfterResults from '@/components/BeforeAfterResults';
 import TechnicalReport from '@/components/TechnicalReport';
+import PVDesignPanel from '@/components/PVDesignPanel';
 import ComparisonSection from '@/components/ComparisonSection';
 import HelpSection from '@/components/HelpSection';
 import UserManagement from '@/pages/user-management';
 import { useAuth } from '@/hooks/use-auth';
 
-type ActiveTab = 'designer' | 'dashboard' | 'analysis' | 'comparison' | 'help' | 'users';
+type ActiveTab = 'designer' | 'pv-design' | 'dashboard' | 'analysis' | 'comparison' | 'help' | 'users';
 
 export default function SolarCalculatorApp() {
   const { theme, toggleTheme } = useTheme();
@@ -203,6 +204,13 @@ export default function SolarCalculatorApp() {
                           </div>
                         </div>
                       </div>
+                    )}
+
+                    {activeTab === 'pv-design' && (
+                      <PVDesignPanel
+                        state={state.pvDesign}
+                        onChange={(pv) => updateField('pvDesign', pv)}
+                      />
                     )}
 
                     {activeTab === 'dashboard' && (

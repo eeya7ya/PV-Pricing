@@ -171,6 +171,12 @@ export async function registerRoutes(app: Express): Promise<void> {
         // M5 legacy NEM export haircut (default 0.80 per MDPI Energies 2025
         // review; verify against the legacy Instructions PDF on emrc.gov.jo).
         legacy_export_haircut: z.number().min(0).max(1).optional().default(LEGACY_EXPORT_HAIRCUT),
+        // PV Design module override (Jordan PV physics engine). When
+        // present, the per-month PV generation comes from the design engine
+        // (region × tilt × loss chain) instead of the consumption-based
+        // X2 = (consumption / 12) × mechanism-cap-fraction fallback.
+        monthly_pv_generation_override: z.array(z.number().min(0)).length(12).optional(),
+        kwp_dc_override: z.number().min(0).optional(),
       });
 
       // Residential 3-period validation schema
@@ -236,6 +242,8 @@ export async function registerRoutes(app: Express): Promise<void> {
         is_temporary,
         annual_reset_policy,
         legacy_export_haircut,
+        monthly_pv_generation_override,
+        kwp_dc_override,
         // Residential 3-period factor fields (undefined for industrial)
         day_factors,
         evening_factors,
@@ -315,6 +323,20 @@ export async function registerRoutes(app: Express): Promise<void> {
       if (capped.capped) {
         monthly_pv_generation = kwp_dc * SPECIFIC_YIELD_KWH_PER_KWP_MONTH * (efficiency / 100);
       }
+
+      // PV Design override: if a 12-vector arrived from the physics engine,
+      // use it directly (replacing the consumption-based X2 fallback). Each
+      // month gets its own value.
+      const pvGenForMonth = (monthIndex: number): number =>
+        monthly_pv_generation_override
+          ? monthly_pv_generation_override[monthIndex]
+          : monthly_pv_generation;
+      const annual_pv_generation = monthly_pv_generation_override
+        ? monthly_pv_generation_override.reduce((s: number, v: number) => s + v, 0)
+        : monthly_pv_generation * 12;
+      // If the design module also supplied a kWp_DC, surface it; else compute
+      // from the resolved inverter kWac × DC:AC ratio.
+      const final_kwp_dc = kwp_dc_override ?? kwp_dc;
 
       // Eligibility advisory (warning only — does not block the calc).
       const eligibility = isEligibleForMechanism(sector, mech);
@@ -435,7 +457,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         for (let mi = 0; mi < months.length; mi++) {
           const month = months[mi];
           const x1 = consumption[month];
-          const x2 = monthly_pv_generation;
+          const x2 = pvGenForMonth(mi);
 
           const y1 = x1 * period1_factors[month]; // 05–14
           const y2 = x1 * period2_factors[month]; // 14–17
@@ -531,7 +553,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         for (let mi = 0; mi < months.length; mi++) {
           const month = months[mi];
           const x1 = consumption[month];
-          const x2 = monthly_pv_generation;
+          const x2 = pvGenForMonth(mi);
 
           const y1 = x1 * day_factors[month];
           const y2 = x1 * evening_factors[month];
@@ -627,9 +649,11 @@ export async function registerRoutes(app: Express): Promise<void> {
         monthly_data,
         annual_summary: {
           total_consumption: total_annual_consumption,
-          pv_size: monthly_pv_generation,
+          pv_size: monthly_pv_generation_override
+            ? annual_pv_generation / 12
+            : monthly_pv_generation,
           inverter_size,
-          annual_generation: monthly_pv_generation * 12,
+          annual_generation: annual_pv_generation,
           total_self_consumption,
           total_export,
           cost_before: total_cost_before,
@@ -647,7 +671,8 @@ export async function registerRoutes(app: Express): Promise<void> {
           sector_label: sectorTariff.label,
           net_billing_mechanism,
           // PV sizing (EMRC standard yield + DC:AC + residential caps)
-          kwp_dc,
+          kwp_dc: final_kwp_dc,
+          pv_design_active: !!monthly_pv_generation_override,
           dc_ac_ratio: sectorClass === 'residential' ? 1.5 : 1.2,
           specific_yield_kwh_per_kwp_year: SPECIFIC_YIELD_KWH_PER_KWP_MONTH * 12,
           inverter_cap_kwac: capped.cap ?? null,

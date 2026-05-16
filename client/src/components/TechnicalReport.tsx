@@ -107,6 +107,14 @@ export default function TechnicalReport({
               <th>PV array (kWp DC)</th><td>{fmt(s.kwp_dc)} kWp</td>
             </tr>
             <tr>
+              <th>Sizing source</th>
+              <td colSpan={3}>
+                {s.pv_design_active
+                  ? 'PV Design module (Jordan resource model — region × tilt × full loss chain)'
+                  : 'Consumption-based default (X₂ = consumption ÷ 12 × mechanism cap)'}
+              </td>
+            </tr>
+            <tr>
               <th>DC : AC ratio</th><td>{fmt(s.dc_ac_ratio)}</td>
               <th>Specific yield</th>
               <td>{fmt0(s.specific_yield_kwh_per_kwp_year)} kWh/kWp·year</td>
