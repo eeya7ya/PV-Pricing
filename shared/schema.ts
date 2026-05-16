@@ -190,7 +190,8 @@ export const AnnualSummarySchema = z.object({
   eligibility_status: z.enum(['eligible', 'ineligible', 'unclear']).optional(),
   annual_reset_policy: z.string().optional(),
   forfeited_credit_jd: z.number().optional(),
-  cashed_out_credit_jd: z.number().optional()
+  cashed_out_credit_jd: z.number().optional(),
+  pv_design_active: z.boolean().optional()
 });
 
 

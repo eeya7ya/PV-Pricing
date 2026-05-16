@@ -1,4 +1,4 @@
-import { Calculator, BarChart3, TrendingUp, GitCompare, HelpCircle, Users } from 'lucide-react';
+import { Calculator, BarChart3, TrendingUp, GitCompare, HelpCircle, Users, Sun } from 'lucide-react';
 import {
   Sidebar,
   SidebarContent,
@@ -22,6 +22,12 @@ const items = [
     url: 'designer',
     icon: Calculator,
     description: 'Configure and design your solar PV system'
+  },
+  {
+    title: 'PV Design',
+    url: 'pv-design',
+    icon: Sun,
+    description: 'Quick Quote (5 inputs) or Detailed Engineering — Jordan resource model'
   },
   {
     title: 'Dashboard',
