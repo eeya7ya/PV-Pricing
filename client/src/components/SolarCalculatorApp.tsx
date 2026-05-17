@@ -20,7 +20,9 @@ import AnalysisSection from '@/components/AnalysisSection';
 import BeforeAfterResults from '@/components/BeforeAfterResults';
 import TechnicalReport from '@/components/TechnicalReport';
 import PVDesignPanel from '@/components/PVDesignPanel';
+import LoadProfilePanel from '@/components/LoadProfilePanel';
 import ComparisonSection from '@/components/ComparisonSection';
+import { quickQuoteYield, calculatePVYield } from '@shared/jordanPVDesign';
 import HelpSection from '@/components/HelpSection';
 import UserManagement from '@/pages/user-management';
 import { useAuth } from '@/hooks/use-auth';
@@ -119,6 +121,54 @@ export default function SolarCalculatorApp() {
                               consumption={state.consumption}
                               onChange={(consumption) => updateField('consumption', consumption)}
                             />
+
+                            {/* When-you-use-electricity panel: makes the
+                                load TOU assumption visible and editable. */}
+                            {(() => {
+                              const sector =
+                                state.customerType === 'Residential'
+                                  ? (state.tariffSupported ? 'A1_subsidized' : 'A2_unsubsidized')
+                                  : state.customerType === 'Industrial' ? 'C2_medium_industrial'
+                                  : state.customerType === 'Commercial' ? 'B1_commercial'
+                                  : state.customerType === 'Hotels'     ? 'D1_hotel_post2008'
+                                  : state.customerType === 'Hospitals'  ? 'E1_private_hospital'
+                                  : state.customerType === 'Agriculture'? 'F1_agri_std'
+                                  : 'A1_subsidized';
+                              const mechanism =
+                                state.gridConnection === 'wheeling'           ? 'M1_net_value_offsite' :
+                                state.gridConnection === 'Zero export'        ? 'M3_zero_export' :
+                                state.gridConnection === 'Buy all sell all'   ? 'M4_buy_all_sell_all' :
+                                state.gridConnection === 'Legacy net metering'? 'M5_legacy_net_metering' :
+                                'M2_net_value_onsite';
+                              const monthlyConsumptionAvg =
+                                (Object.values(state.consumption) as number[])
+                                  .reduce((s, v) => s + (Number(v) || 0), 0) / 12;
+                              // Live PV average from the physics engine — so
+                              // the overlap chart works on first render,
+                              // before the user clicks Calculate.
+                              const liveYield = state.pvDesign.tier === 'quick'
+                                ? quickQuoteYield({
+                                    region: state.pvDesign.region,
+                                    sizingMode: state.pvDesign.sizingMode,
+                                    sizeValue: state.pvDesign.sizeValue,
+                                    systemType: state.pvDesign.systemType,
+                                    prOverride: state.pvDesign.prOverride ?? undefined,
+                                  })
+                                : calculatePVYield(state.pvDesign.detailed);
+                              const monthlyPVAvg = liveYield.annualKWh_year1 / 12;
+                              return (
+                                <LoadProfilePanel
+                                  customerType={state.customerType}
+                                  sector={sector}
+                                  region={state.pvDesign.region}
+                                  mechanism={mechanism}
+                                  monthlyConsumptionAvg={monthlyConsumptionAvg}
+                                  monthlyPVAvg={monthlyPVAvg}
+                                  loadTOUOverride={state.loadTOUOverride}
+                                  onLoadTOUChange={(s) => updateField('loadTOUOverride', s)}
+                                />
+                              );
+                            })()}
 
                             <SystemConfiguration
                               efficiency={state.efficiency}

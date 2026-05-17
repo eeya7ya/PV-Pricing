@@ -30,6 +30,7 @@ import {
   type YieldResult,
   type JordanRegion,
   type ClimateZone,
+  type TOUShares,
 } from '@shared/jordanPVDesign';
 import { type PVDesignState, defaultPVDesignState } from '@/components/PVDesignPanel';
 
@@ -107,9 +108,14 @@ interface CalculatorState {
   tariffConfig: TariffConfig;
 
   // PV design module (Tier 1 Quick Quote / Tier 2 Detailed Engineering).
-  // When `pvDesign.enabled` is true, the physics engine's monthly kWh vector
-  // overrides the consumption-based PV generation in the billing pipeline.
+  // The physics engine's monthly kWh vector always feeds the billing pipeline.
   pvDesign: PVDesignState;
+
+  // Load TOU profile override. null = use sector-typical default
+  // (residential 30/25/45 evening-heavy etc.). When set, the user has
+  // explicitly described their usage pattern (work-from-home, commuter,
+  // night-shift, vacation, etc.) and we use their shares instead.
+  loadTOUOverride: TOUShares | null;
 }
 
 interface CalculatorLogicProps {
@@ -254,6 +260,8 @@ const initialState: CalculatorState = {
   })(),
 
   pvDesign: defaultPVDesignState(),
+
+  loadTOUOverride: null,
 };
 
 export default function CalculatorLogic({ children }: CalculatorLogicProps) {
@@ -653,6 +661,9 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
         power_factor: 0.9,
         connection_phase: pvd.systemType === 'res-rooftop' ? 1 : 3,
         meter_phase: pvd.systemType === 'res-rooftop' ? 1 : 3,
+        // User-supplied load TOU shares (work-from-home, night-shift, etc.)
+        // — sent only when the user has overridden the sector default.
+        ...(s.loadTOUOverride && { load_tou: s.loadTOUOverride }),
       };
 
       console.log('🔆 UNIFIED CALC →', {
