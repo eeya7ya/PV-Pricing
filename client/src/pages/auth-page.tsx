@@ -19,13 +19,18 @@ function GoogleSignInButton({ onCredential }: { onCredential: (credential: strin
   const divRef = useRef<HTMLDivElement>(null);
   const cbRef = useRef(onCredential);
   cbRef.current = onCredential;
+  const renderedRef = useRef(false);
 
   useEffect(() => {
     if (!GOOGLE_CLIENT_ID) return;
     let cancelled = false;
 
     const render = () => {
-      if (cancelled || !window.google?.accounts?.id || !divRef.current) return;
+      // Render exactly once — the script's load event can fire across mounts,
+      // and Google's widget otherwise repaints, which looks like a double render.
+      if (cancelled || renderedRef.current) return;
+      if (!window.google?.accounts?.id || !divRef.current) return;
+      renderedRef.current = true;
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
         callback: (resp: { credential?: string }) => {
@@ -39,6 +44,7 @@ function GoogleSignInButton({ onCredential }: { onCredential: (credential: strin
         text: 'continue_with',
         shape: 'pill',
         width: 320,
+        locale: 'en',
       });
     };
 
@@ -53,7 +59,8 @@ function GoogleSignInButton({ onCredential }: { onCredential: (credential: strin
     }
     const script = document.createElement('script');
     script.id = 'gsi-script';
-    script.src = 'https://accounts.google.com/gsi/client';
+    // hl=en forces English regardless of the visitor's Google account locale.
+    script.src = 'https://accounts.google.com/gsi/client?hl=en';
     script.async = true;
     script.defer = true;
     script.onload = render;

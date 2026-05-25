@@ -85,9 +85,9 @@ export default function AppSidebar({ activeTab, onTabChange, isAdmin = false }: 
                           : 'group-hover:text-orange-400'
                       }`} />
                       <span className={`font-medium transition-colors duration-300 ${
-                        activeTab === item.url 
-                          ? 'text-orange-200 dark:text-orange-100 font-semibold' 
-                          : 'group-hover:text-orange-400 dark:group-hover:text-orange-200'
+                        activeTab === item.url
+                          ? 'text-orange-700 dark:text-orange-100 font-semibold'
+                          : 'text-foreground/80 group-hover:text-orange-600 dark:group-hover:text-orange-200'
                       }`}>{item.title}</span>
                     </div>
                     <span className="text-xs text-muted-foreground text-left">
