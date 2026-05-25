@@ -4,7 +4,7 @@ import { getQueryFn, apiRequest, queryClient } from "../lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 export interface AuthUser {
-  id: number;
+  id: number | string;
   username: string;
   firstName: string;
   lastName: string;
@@ -13,14 +13,12 @@ export interface AuthUser {
   isAdmin: boolean;
 }
 
-type LoginCreds = { username: string; password: string };
-
 type AuthContextType = {
   user: AuthUser | null;
   isLoading: boolean;
   error: Error | null;
-  loginMutation: UseMutationResult<AuthUser, Error, LoginCreds>;
-  demoLoginMutation: UseMutationResult<AuthUser, Error, string>;
+  googleLoginMutation: UseMutationResult<AuthUser, Error, string>;
+  guestLoginMutation: UseMutationResult<AuthUser, Error, void>;
   logoutMutation: UseMutationResult<void, Error, void>;
 };
 
@@ -38,31 +36,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryFn: getQueryFn({ on401: "returnNull" }),
   });
 
-  const loginMutation = useMutation<AuthUser, Error, LoginCreds>({
-    mutationFn: async (creds) => {
-      const res = await apiRequest("POST", "/api/login", creds);
+  const googleLoginMutation = useMutation<AuthUser, Error, string>({
+    mutationFn: async (credential) => {
+      const res = await apiRequest("POST", "/api/auth/google", { credential });
       return (await res.json()) as AuthUser;
     },
     onSuccess: (data) => {
       queryClient.setQueryData(["/api/auth/user"], data);
-      toast({ title: "Welcome back", description: `Signed in as ${data.username}` });
+      toast({ title: "Signed in", description: `Welcome, ${data.firstName || data.email}` });
     },
     onError: (err) => {
-      toast({ title: "Sign-in failed", description: err.message, variant: "destructive" });
+      toast({ title: "Google sign-in failed", description: err.message, variant: "destructive" });
     },
   });
 
-  const demoLoginMutation = useMutation<AuthUser, Error, string>({
-    mutationFn: async (as) => {
-      const res = await apiRequest("POST", "/api/demo-login", { as });
+  const guestLoginMutation = useMutation<AuthUser, Error, void>({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/guest-login");
       return (await res.json()) as AuthUser;
     },
     onSuccess: (data) => {
       queryClient.setQueryData(["/api/auth/user"], data);
-      toast({ title: "Demo access", description: `Signed in as ${data.username}` });
+      toast({ title: "Guest access", description: "Signed in as a guest" });
     },
     onError: (err) => {
-      toast({ title: "Demo sign-in failed", description: err.message, variant: "destructive" });
+      toast({ title: "Guest sign-in failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -85,8 +83,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user: user ?? null,
         isLoading,
         error,
-        loginMutation,
-        demoLoginMutation,
+        googleLoginMutation,
+        guestLoginMutation,
         logoutMutation,
       }}
     >

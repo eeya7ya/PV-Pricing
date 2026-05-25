@@ -1,28 +1,90 @@
-import { useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useAuth } from '@/hooks/use-auth';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Loader2, Calculator, Sun, BarChart3, User, Shield, Wrench } from 'lucide-react';
+import { Loader2, Calculator, Sun, BarChart3, UserRound } from 'lucide-react';
 import { Redirect } from 'wouter';
 
+declare global {
+  interface Window {
+    google?: any;
+  }
+}
+
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
+
+/** Loads Google Identity Services and renders the official sign-in button.
+ *  Calls `onCredential` with the returned ID token (JWT). */
+function GoogleSignInButton({ onCredential }: { onCredential: (credential: string) => void }) {
+  const divRef = useRef<HTMLDivElement>(null);
+  const cbRef = useRef(onCredential);
+  cbRef.current = onCredential;
+
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID) return;
+    let cancelled = false;
+
+    const render = () => {
+      if (cancelled || !window.google?.accounts?.id || !divRef.current) return;
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: (resp: { credential?: string }) => {
+          if (resp?.credential) cbRef.current(resp.credential);
+        },
+      });
+      divRef.current.innerHTML = '';
+      window.google.accounts.id.renderButton(divRef.current, {
+        theme: 'filled_black',
+        size: 'large',
+        text: 'continue_with',
+        shape: 'pill',
+        width: 320,
+      });
+    };
+
+    if (window.google?.accounts?.id) {
+      render();
+      return;
+    }
+    const existing = document.getElementById('gsi-script') as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener('load', render);
+      return () => existing.removeEventListener('load', render);
+    }
+    const script = document.createElement('script');
+    script.id = 'gsi-script';
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = render;
+    document.body.appendChild(script);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!GOOGLE_CLIENT_ID) {
+    return (
+      <p className="text-xs text-orange-200/60 text-center leading-relaxed">
+        Google sign-in isn’t configured yet. Set <code className="text-orange-200/80">VITE_GOOGLE_CLIENT_ID</code> to enable it.
+      </p>
+    );
+  }
+  return (
+    <div className="flex justify-center">
+      <div ref={divRef} data-testid="google-signin-button" />
+    </div>
+  );
+}
+
 export default function AuthPage() {
-  const { user, isLoading, loginMutation, demoLoginMutation } = useAuth();
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const { user, isLoading, googleLoginMutation, guestLoginMutation } = useAuth();
 
   if (user && !isLoading) {
     return <Redirect to="/" />;
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!username || !password) return;
-    loginMutation.mutate({ username, password });
-  };
-
-  const isBusy = loginMutation.isPending || demoLoginMutation.isPending || isLoading;
+  const isBusy = googleLoginMutation.isPending || guestLoginMutation.isPending || isLoading;
 
   return (
     <div className="min-h-screen relative overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-orange-900">
@@ -58,96 +120,41 @@ export default function AuthPage() {
             <CardHeader className="relative">
               <CardTitle className="text-white text-center text-xl">Sign In</CardTitle>
             </CardHeader>
-            <CardContent className="relative">
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="username" className="text-orange-100">Username</Label>
-                  <Input
-                    id="username"
-                    type="text"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder="admin / user / engineer"
-                    autoComplete="username"
-                    data-testid="input-username"
-                    className="bg-white/10 border-orange-500/30 text-white placeholder:text-orange-200/40"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="password" className="text-orange-100">Password</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    autoComplete="current-password"
-                    data-testid="input-password"
-                    className="bg-white/10 border-orange-500/30 text-white placeholder:text-orange-200/40"
-                  />
-                </div>
-
-                {loginMutation.isError && (
-                  <p className="text-sm text-red-300" data-testid="text-login-error">
-                    {loginMutation.error?.message || 'Login failed'}
-                  </p>
+            <CardContent className="relative space-y-5">
+              <div className="min-h-[44px] flex items-center justify-center">
+                {googleLoginMutation.isPending ? (
+                  <div className="flex items-center gap-2 text-orange-100">
+                    <Loader2 className="h-5 w-5 animate-spin" /> Signing in…
+                  </div>
+                ) : (
+                  <GoogleSignInButton onCredential={(c) => googleLoginMutation.mutate(c)} />
                 )}
-
-                <Button
-                  type="submit"
-                  disabled={isBusy}
-                  className="w-full bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-semibold h-12 text-lg shadow-lg shadow-orange-600/25 border-0"
-                  data-testid="button-login"
-                >
-                  {loginMutation.isPending ? (
-                    <><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Signing in…</>
-                  ) : (
-                    'Sign in'
-                  )}
-                </Button>
-              </form>
-
-              <div className="mt-6 pt-4 border-t border-orange-500/20">
-                <p className="text-xs uppercase tracking-wider text-orange-200/70 text-center mb-3">
-                  Quick demo access
-                </p>
-                <div className="grid grid-cols-3 gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={isBusy}
-                    onClick={() => demoLoginMutation.mutate('admin')}
-                    className="bg-white/5 border-orange-500/30 text-orange-100 hover:bg-orange-500/20 hover:text-white"
-                    data-testid="button-demo-admin"
-                  >
-                    <Shield className="h-4 w-4 mr-1" /> Admin
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={isBusy}
-                    onClick={() => demoLoginMutation.mutate('user')}
-                    className="bg-white/5 border-orange-500/30 text-orange-100 hover:bg-orange-500/20 hover:text-white"
-                    data-testid="button-demo-user"
-                  >
-                    <User className="h-4 w-4 mr-1" /> User
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={isBusy}
-                    onClick={() => demoLoginMutation.mutate('engineer')}
-                    className="bg-white/5 border-orange-500/30 text-orange-100 hover:bg-orange-500/20 hover:text-white"
-                    data-testid="button-demo-engineer"
-                  >
-                    <Wrench className="h-4 w-4 mr-1" /> Engineer
-                  </Button>
-                </div>
-                <p className="text-xs text-orange-200/50 text-center mt-3">
-                  admin/admin123 · user/user123 · engineer/engineer123
-                </p>
               </div>
+
+              <div className="flex items-center gap-3">
+                <span className="h-px flex-1 bg-orange-500/20" />
+                <span className="text-xs uppercase tracking-wider text-orange-200/60">or</span>
+                <span className="h-px flex-1 bg-orange-500/20" />
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isBusy}
+                onClick={() => guestLoginMutation.mutate()}
+                className="w-full bg-white/5 border-orange-500/30 text-orange-100 hover:bg-orange-500/20 hover:text-white h-12 text-base"
+                data-testid="button-guest"
+              >
+                {guestLoginMutation.isPending ? (
+                  <><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Signing in…</>
+                ) : (
+                  <><UserRound className="mr-2 h-5 w-5" /> Continue as guest</>
+                )}
+              </Button>
+
+              <p className="text-xs text-orange-200/50 text-center">
+                Guest sessions are not saved. Sign in with Google to use your own account.
+              </p>
             </CardContent>
           </Card>
 

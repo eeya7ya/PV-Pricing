@@ -61,9 +61,21 @@ export const DEMO_USERS: DemoUser[] = [
   },
 ];
 
-export interface SessionPayload {
-  userId: number;
+export interface SessionUser {
+  id: number | string;
   username: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  profileImageUrl: string | null;
+  isAdmin: boolean;
+}
+
+export interface SessionPayload {
+  // The full (password-free) user is embedded in the signed cookie so the
+  // session is stateless — no DB / demo-user lookup needed. This lets Google
+  // and guest sessions work without persisting anything server-side.
+  user: SessionUser;
   exp: number;
 }
 
@@ -137,42 +149,70 @@ function findUserByUsername(username: string): DemoUser | undefined {
   return DEMO_USERS.find((u) => u.username.toLowerCase() === username.toLowerCase());
 }
 
-function findUserById(id: number): DemoUser | undefined {
-  return DEMO_USERS.find((u) => u.id === id);
-}
-
-function publicUser(u: DemoUser) {
+function publicUser(u: DemoUser): SessionUser {
   // Don't leak the password.
   const { password: _pw, ...rest } = u;
   return rest;
 }
 
+function issueSession(res: Response, user: SessionUser) {
+  const token = signSession({ user, exp: Date.now() + COOKIE_MAX_AGE });
+  setSessionCookie(res, token);
+}
+
+/** Verify a Google Identity Services ID token via Google's tokeninfo
+ *  endpoint, then validate the audience, issuer and email. Returns the
+ *  decoded claims or throws. Dependency-free; relies on outbound network. */
+async function verifyGoogleIdToken(idToken: string, clientId: string) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  let resp: globalThis.Response;
+  try {
+    resp = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
+      { signal: controller.signal },
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!resp.ok) throw new Error("Could not verify Google token");
+  const data = (await resp.json()) as Record<string, unknown>;
+
+  const aud = String(data.aud ?? "");
+  const iss = String(data.iss ?? "");
+  const email = typeof data.email === "string" ? data.email : "";
+  const emailVerified = data.email_verified === true || data.email_verified === "true";
+
+  if (aud !== clientId) throw new Error("Google token audience mismatch");
+  if (iss !== "accounts.google.com" && iss !== "https://accounts.google.com") {
+    throw new Error("Invalid Google token issuer");
+  }
+  if (!email || !emailVerified) throw new Error("Google account email is not verified");
+
+  return {
+    sub: String(data.sub ?? ""),
+    email,
+    given_name: typeof data.given_name === "string" ? data.given_name : "",
+    family_name: typeof data.family_name === "string" ? data.family_name : "",
+    picture: typeof data.picture === "string" ? data.picture : null,
+  };
+}
+
 export const isAuthenticated: RequestHandler = (req, res, next) => {
-  const cookies = parseCookies(req.headers.cookie);
-  const token = cookies[COOKIE_NAME];
-  if (!token) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
-  const session = verifySession(token);
-  if (!session) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
-  const user = findUserById(session.userId);
+  const user = getCurrentUser(req);
   if (!user) {
     return res.status(401).json({ message: "Unauthorized" });
   }
-  (req as any).user = publicUser(user);
+  (req as any).user = user;
   next();
 };
 
-export function getCurrentUser(req: Request) {
+export function getCurrentUser(req: Request): SessionUser | null {
   const cookies = parseCookies(req.headers.cookie);
   const token = cookies[COOKIE_NAME];
   if (!token) return null;
   const session = verifySession(token);
-  if (!session) return null;
-  const user = findUserById(session.userId);
-  return user ? publicUser(user) : null;
+  return session ? session.user : null;
 }
 
 export function setupAuth(app: Express) {
@@ -186,12 +226,7 @@ export function setupAuth(app: Express) {
     if (!user || user.password !== password) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
-    const token = signSession({
-      userId: user.id,
-      username: user.username,
-      exp: Date.now() + COOKIE_MAX_AGE,
-    });
-    setSessionCookie(res, token);
+    issueSession(res, publicUser(user));
     res.status(200).json(publicUser(user));
   });
 
@@ -200,13 +235,52 @@ export function setupAuth(app: Express) {
   app.post("/api/demo-login", (req: Request, res: Response) => {
     const as = (req.body?.as ?? req.query?.as ?? "user") as string;
     const user = findUserByUsername(as) ?? findUserByUsername("user")!;
-    const token = signSession({
-      userId: user.id,
-      username: user.username,
-      exp: Date.now() + COOKIE_MAX_AGE,
-    });
-    setSessionCookie(res, token);
+    issueSession(res, publicUser(user));
     res.status(200).json(publicUser(user));
+  });
+
+  // Continue as guest — a non-admin, throwaway session (no account needed).
+  app.post("/api/guest-login", (_req: Request, res: Response) => {
+    const guest: SessionUser = {
+      id: "guest",
+      username: "guest",
+      firstName: "Guest",
+      lastName: "",
+      email: "",
+      profileImageUrl: null,
+      isAdmin: false,
+    };
+    issueSession(res, guest);
+    res.status(200).json(guest);
+  });
+
+  // Google sign-in — verify the GIS ID token, then issue our signed cookie.
+  // Any verified Google account is admitted as a normal (non-admin) user.
+  app.post("/api/auth/google", async (req: Request, res: Response) => {
+    const clientId = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      return res.status(500).json({ message: "Google sign-in is not configured" });
+    }
+    const credential = req.body?.credential;
+    if (typeof credential !== "string" || !credential) {
+      return res.status(400).json({ message: "Missing Google credential" });
+    }
+    try {
+      const claims = await verifyGoogleIdToken(credential, clientId);
+      const user: SessionUser = {
+        id: claims.sub,
+        username: claims.email,
+        firstName: claims.given_name,
+        lastName: claims.family_name,
+        email: claims.email,
+        profileImageUrl: claims.picture,
+        isAdmin: false,
+      };
+      issueSession(res, user);
+      res.status(200).json(user);
+    } catch (err) {
+      res.status(401).json({ message: (err as Error).message || "Google sign-in failed" });
+    }
   });
 
   app.post("/api/logout", (_req: Request, res: Response) => {

@@ -102,21 +102,51 @@ function clearSessionCookie(res) {
 function findUserByUsername(username) {
   return DEMO_USERS.find((u) => u.username.toLowerCase() === username.toLowerCase());
 }
-function findUserById(id) {
-  return DEMO_USERS.find((u) => u.id === id);
-}
 function publicUser(u) {
   const { password: _pw, ...rest } = u;
   return rest;
+}
+function issueSession(res, user) {
+  const token = signSession({ user, exp: Date.now() + COOKIE_MAX_AGE });
+  setSessionCookie(res, token);
+}
+async function verifyGoogleIdToken(idToken, clientId) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8e3);
+  let resp;
+  try {
+    resp = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
+      { signal: controller.signal }
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!resp.ok) throw new Error("Could not verify Google token");
+  const data = await resp.json();
+  const aud = String(data.aud ?? "");
+  const iss = String(data.iss ?? "");
+  const email = typeof data.email === "string" ? data.email : "";
+  const emailVerified = data.email_verified === true || data.email_verified === "true";
+  if (aud !== clientId) throw new Error("Google token audience mismatch");
+  if (iss !== "accounts.google.com" && iss !== "https://accounts.google.com") {
+    throw new Error("Invalid Google token issuer");
+  }
+  if (!email || !emailVerified) throw new Error("Google account email is not verified");
+  return {
+    sub: String(data.sub ?? ""),
+    email,
+    given_name: typeof data.given_name === "string" ? data.given_name : "",
+    family_name: typeof data.family_name === "string" ? data.family_name : "",
+    picture: typeof data.picture === "string" ? data.picture : null
+  };
 }
 function getCurrentUser(req) {
   const cookies = parseCookies(req.headers.cookie);
   const token = cookies[COOKIE_NAME];
   if (!token) return null;
   const session = verifySession(token);
-  if (!session) return null;
-  const user = findUserById(session.userId);
-  return user ? publicUser(user) : null;
+  return session ? session.user : null;
 }
 function setupAuth(app) {
   app.post("/api/login", (req, res) => {
@@ -128,24 +158,53 @@ function setupAuth(app) {
     if (!user || user.password !== password) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
-    const token = signSession({
-      userId: user.id,
-      username: user.username,
-      exp: Date.now() + COOKIE_MAX_AGE
-    });
-    setSessionCookie(res, token);
+    issueSession(res, publicUser(user));
     res.status(200).json(publicUser(user));
   });
   app.post("/api/demo-login", (req, res) => {
     const as = req.body?.as ?? req.query?.as ?? "user";
     const user = findUserByUsername(as) ?? findUserByUsername("user");
-    const token = signSession({
-      userId: user.id,
-      username: user.username,
-      exp: Date.now() + COOKIE_MAX_AGE
-    });
-    setSessionCookie(res, token);
+    issueSession(res, publicUser(user));
     res.status(200).json(publicUser(user));
+  });
+  app.post("/api/guest-login", (_req, res) => {
+    const guest = {
+      id: "guest",
+      username: "guest",
+      firstName: "Guest",
+      lastName: "",
+      email: "",
+      profileImageUrl: null,
+      isAdmin: false
+    };
+    issueSession(res, guest);
+    res.status(200).json(guest);
+  });
+  app.post("/api/auth/google", async (req, res) => {
+    const clientId = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      return res.status(500).json({ message: "Google sign-in is not configured" });
+    }
+    const credential = req.body?.credential;
+    if (typeof credential !== "string" || !credential) {
+      return res.status(400).json({ message: "Missing Google credential" });
+    }
+    try {
+      const claims = await verifyGoogleIdToken(credential, clientId);
+      const user = {
+        id: claims.sub,
+        username: claims.email,
+        firstName: claims.given_name,
+        lastName: claims.family_name,
+        email: claims.email,
+        profileImageUrl: claims.picture,
+        isAdmin: false
+      };
+      issueSession(res, user);
+      res.status(200).json(user);
+    } catch (err) {
+      res.status(401).json({ message: err.message || "Google sign-in failed" });
+    }
   });
   app.post("/api/logout", (_req, res) => {
     clearSessionCookie(res);
