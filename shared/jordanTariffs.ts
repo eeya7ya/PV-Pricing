@@ -200,7 +200,7 @@ export const SECTOR_TARIFFS: Record<SectorCode, SectorTariff> = {
     tou3: { peakFils: 298, partialFils: 287, offPeakFils: 278 },
     temporaryFils: 285,
     phase2MandatoryTOU: true,
-    notes: 'TOU rates 298/287/278 are user-editable defaults — not confirmed in any retrieved primary source. Verify against actual bill before launch.',
+    notes: 'Pre-TOU flat rate 285 fils CONFIRMED by NEPCO/EMRC tariff book (Electricity Tariff Instructions eff. 1/1/2020, rates upd. 1/4/2022). Banks moved to mandatory TOU in Phase 2 (1/1/2025) per EMRC/MEMR press, but the per-period peak/partial/off-peak fils are NOT published; 298/287/278 is a reconstruction around the 285 anchor — verify against a post-2025 bill.',
   },
   B4_telecom: {
     code: 'B4_telecom',
@@ -256,6 +256,7 @@ export const SECTOR_TARIFFS: Record<SectorCode, SectorTariff> = {
     tou3: { peakFils: 94, partialFils: 82, offPeakFils: 73 },
     temporaryFils: 115,
     pfPenaltyApplies: true,
+    notes: 'Pre-TOU rate CONFIRMED by NEPCO/EMRC tariff book (eff. 1/4/2022): flat 82 fils, or legacy 2-part day/night 82/82 (max-load tariff 0). Mandatory 3-part for 4★+ connected since 14/3/2008; the post-Phase-2 per-period values (94/82/73) are reconstructed around the 82 anchor — verify against a post-2025 bill.',
   },
   D2_hotel_pre2008_flat: {
     code: 'D2_hotel_pre2008_flat',
@@ -294,7 +295,7 @@ export const SECTOR_TARIFFS: Record<SectorCode, SectorTariff> = {
     tou3: { peakFils: 151, partialFils: 140, offPeakFils: 130 },
     temporaryFils: 170,
     phase2MandatoryTOU: true,
-    notes: 'Partial and off-peak rates are placeholders pending EMRC confirmation. Peak ≈151 fils per Al-Ghad citing Private Hospitals Association.',
+    notes: 'Pre-TOU flat rate 140 fils CONFIRMED by NEPCO/EMRC tariff book (eff. 1/1/2020). Mandatory TOU since Phase 2 (1/1/2025); only peak ≈151 reported (Al-Ghad / Private Hospitals Association). Partial/off-peak (140/130) reconstructed around the 140 anchor — verify against a post-2025 bill.',
   },
   E2_govt_hospital: {
     code: 'E2_govt_hospital',

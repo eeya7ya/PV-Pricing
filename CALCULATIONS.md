@@ -644,8 +644,35 @@ benchmark.
     8. Status of 2025 battery-storage amendments to Bylaw 58
 - **B3 Bank**, **E1 Private Hospital partial/off-peak**, **D1 Hotel TOU**,
   and the **~13 JD/kWac commercial grid-fee** numbers are user-editable
-  defaults — not confirmed in any retrieved primary source. Validate
-  against an actual bill or direct EMRC enquiry before launch.
+  defaults — the *three-period TOU spreads* are reconstructions, not
+  primary-sourced. Validate against an actual post-2025 bill before launch.
+
+  **Primary-source reconciliation (NEPCO/EMRC "Electricity Tariff
+  Instructions", eff. 1/1/2020, rates updated 1/4/2022).** This is the
+  pre-reform tariff book: it predates the Phase-1 (1/7/2024) and Phase-2
+  (1/1/2025) time-of-use conversions, so it contains **no** three-period
+  TOU table for any sector (even medium industrial appears as old day/night
+  68/65, not the current 79/69/59). It does, however, **confirm the flat
+  anchors** the TOU spreads were built around:
+
+  | Sector | Confirmed pre-TOU rate (fils) | Calc TOU (current, est.) |
+  | ------ | ----------------------------- | ------------------------ |
+  | Banks (B3)            | flat **285**                 | 298 / 287 / 278 |
+  | Private hospital (E1) | flat **140**                 | 151 / 140 / 130 |
+  | Hotel 4★+ (D1)        | flat **82** (or 82/82 d/n)   | 94 / 82 / 73    |
+  | Commercial (B1)       | **120 / 152** tiered ✓ match | — (tiered, unchanged) |
+  | Telecom (B4)          | **135 / 178** tiered (old)   | 152 / 142 / 132 (Phase-1 press) |
+  | Govt / Armed Forces (G4) | flat **146** (old)        | 158 / 147 / 138 |
+  | Water pumping (G2)    | flat **95** (old)            | 106 / 96 / 86   |
+  | Ports (G8) / Broadcasting (G7) | **159 / 152** ✓ match | — (flat, unchanged) |
+  | Agriculture (F1 / F2) | **55** / day-night **55/49** ✓ | — (unchanged) |
+  | Mixed well (F3)       | ⅔·120 + ⅓·55 = **98.33** ✓   | — (unchanged) |
+
+  The industrial TOU values the calc uses (C2 79/69/59, C3 130/120/110,
+  C4 226/216/206) and telecom/EV/water-pumping TOU are the *current*
+  Phase-1/2 rates corroborated by Jordan Times / Jordan News / PETRA — they
+  are newer than this 2020/2022 book. The bank/hospital/hotel per-period
+  TOU values remain unpublished; only the flat anchors above are primary.
 
 ---
 
