@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { SlidersHorizontal, BarChart3, HelpCircle, Users, FolderClock, Compass } from 'lucide-react';
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -9,6 +11,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar';
+import LegalDialog, { type LegalDoc } from '@/components/LegalDialog';
 
 interface AppSidebarProps {
   activeTab: string;
@@ -58,6 +61,7 @@ const items = [
 
 export default function AppSidebar({ activeTab, onTabChange, isAdmin = false }: AppSidebarProps) {
   const visibleItems = items.filter(item => !item.adminOnly || isAdmin);
+  const [legalDoc, setLegalDoc] = useState<LegalDoc | null>(null);
   return (
     <Sidebar>
       <SidebarContent>
@@ -100,6 +104,33 @@ export default function AppSidebar({ activeTab, onTabChange, isAdmin = false }: 
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+
+      <SidebarFooter className="gap-1 px-3 pb-3">
+        <p className="text-xs font-medium text-muted-foreground" data-testid="text-version">
+          v1.0A · Beta version
+        </p>
+        <div className="flex items-center gap-1 text-[11px] text-muted-foreground/80 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setLegalDoc('terms')}
+            className="hover:text-orange-500 hover:underline transition-colors"
+            data-testid="link-terms"
+          >
+            Terms &amp; Conditions
+          </button>
+          <span aria-hidden>·</span>
+          <button
+            type="button"
+            onClick={() => setLegalDoc('privacy')}
+            className="hover:text-orange-500 hover:underline transition-colors"
+            data-testid="link-privacy"
+          >
+            Privacy Policy
+          </button>
+        </div>
+      </SidebarFooter>
+
+      <LegalDialog doc={legalDoc} onClose={() => setLegalDoc(null)} />
     </Sidebar>
   );
 }
