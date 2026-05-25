@@ -14,7 +14,6 @@ import CustomerGridSelection from '@/components/CustomerGridSelection';
 import MonthlyConsumptionInputs from '@/components/MonthlyConsumptionInputs';
 import SystemConfiguration from '@/components/SystemConfiguration';
 import TimeParametersSection from '@/components/TimeParametersSection';
-import CircularGauge from '@/components/CircularGauge';
 import Dashboard from '@/components/Dashboard';
 import BeforeAfterResults from '@/components/BeforeAfterResults';
 import TechnicalReport from '@/components/TechnicalReport';
@@ -299,35 +298,12 @@ export default function SolarCalculatorApp() {
                           <TabsContent value="performance" className="space-y-8 mt-6">
                             {results ? (
                               <>
-                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                  <CircularGauge
-                                    title="Power Generation"
-                                    value={results.annual_summary.pv_size || 0}
-                                    max={1000}
-                                    unit="kWh"
-                                    variant="chart-1"
-                                  />
-                                  <CircularGauge
-                                    title="System Efficiency"
-                                    value={state.efficiency}
-                                    max={100}
-                                    unit="%"
-                                    variant="chart-2"
-                                  />
-                                  <CircularGauge
-                                    title="Annual Savings"
-                                    value={results.annual_summary.annual_savings || 0}
-                                    max={5000}
-                                    unit="JD"
-                                    variant="chart-3"
-                                  />
-                                </div>
-                                <Dashboard results={results} />
                                 <BeforeAfterResults
                                   results={results}
                                   customerType={state.customerType}
                                   totalConsumption={Object.values(state.consumption).reduce((sum: number, val: any) => sum + val, 0)}
                                 />
+                                <Dashboard results={results} />
                               </>
                             ) : (
                               <NoResults />
