@@ -141,6 +141,14 @@ async function verifyGoogleIdToken(idToken, clientId) {
     picture: typeof data.picture === "string" ? data.picture : null
   };
 }
+var isAuthenticated = (req, res, next) => {
+  const user = getCurrentUser(req);
+  if (!user) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  req.user = user;
+  next();
+};
 function getCurrentUser(req) {
   const cookies = parseCookies(req.headers.cookie);
   const token = cookies[COOKIE_NAME];
@@ -1227,9 +1235,194 @@ var MemStorage = class {
 };
 var storage = new MemStorage();
 
+// server/db.ts
+import { neon } from "@neondatabase/serverless";
+var _sql = null;
+var _ensured = false;
+function dbConfigured() {
+  return Boolean(process.env.DATABASE_URL);
+}
+function getSql() {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL is not set");
+  if (!_sql) _sql = neon(url);
+  return _sql;
+}
+async function ensureSchema() {
+  if (_ensured) return;
+  const sql2 = getSql();
+  await sql2`
+    CREATE TABLE IF NOT EXISTS saved_cases (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_email text NOT NULL,
+      name text NOT NULL,
+      state jsonb NOT NULL,
+      results jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `;
+  await sql2`CREATE INDEX IF NOT EXISTS idx_saved_cases_user_email ON saved_cases (user_email)`;
+  _ensured = true;
+}
+
+// server/savedCases.ts
+async function listCases(email) {
+  await ensureSchema();
+  const sql2 = getSql();
+  const rows = await sql2`
+    SELECT
+      id,
+      name,
+      state->>'customerType'  AS customer_type,
+      state->>'gridConnection' AS grid_connection,
+      (results IS NOT NULL)    AS has_results,
+      created_at,
+      updated_at
+    FROM saved_cases
+    WHERE user_email = ${email}
+    ORDER BY updated_at DESC
+  `;
+  return rows;
+}
+async function getCase(id, email) {
+  await ensureSchema();
+  const sql2 = getSql();
+  const rows = await sql2`
+    SELECT * FROM saved_cases WHERE id = ${id} AND user_email = ${email} LIMIT 1
+  `;
+  return rows[0];
+}
+async function createCase(email, name, state, results) {
+  await ensureSchema();
+  const sql2 = getSql();
+  const rows = await sql2`
+    INSERT INTO saved_cases (user_email, name, state, results)
+    VALUES (
+      ${email},
+      ${name},
+      ${JSON.stringify(state)}::jsonb,
+      ${results == null ? null : JSON.stringify(results)}::jsonb
+    )
+    RETURNING *
+  `;
+  return rows[0];
+}
+async function updateCase(id, email, name, state, results) {
+  await ensureSchema();
+  const sql2 = getSql();
+  const rows = await sql2`
+    UPDATE saved_cases
+    SET name = ${name},
+        state = ${JSON.stringify(state)}::jsonb,
+        results = ${results == null ? null : JSON.stringify(results)}::jsonb,
+        updated_at = now()
+    WHERE id = ${id} AND user_email = ${email}
+    RETURNING *
+  `;
+  return rows[0];
+}
+async function deleteCase(id, email) {
+  await ensureSchema();
+  const sql2 = getSql();
+  const rows = await sql2`
+    DELETE FROM saved_cases WHERE id = ${id} AND user_email = ${email} RETURNING id
+  `;
+  return rows.length > 0;
+}
+
 // server/routes.ts
 async function registerRoutes(app) {
   setupAuth(app);
+  const saveCaseSchema = z2.object({
+    name: z2.string().trim().min(1, "A name is required").max(120),
+    state: z2.unknown(),
+    results: z2.unknown().optional()
+  });
+  const ownerEmail = (req) => {
+    const email = req.user?.email;
+    return typeof email === "string" && email.length > 0 ? email : null;
+  };
+  app.get("/api/cases", isAuthenticated, async (req, res) => {
+    if (!dbConfigured()) {
+      return res.status(503).json({ message: "Saving is not configured yet (DATABASE_URL is missing)." });
+    }
+    const email = ownerEmail(req);
+    if (!email) return res.json([]);
+    try {
+      res.json(await listCases(email));
+    } catch (error) {
+      console.error("listCases failed:", error);
+      res.status(500).json({ message: "Failed to load saved cases" });
+    }
+  });
+  app.get("/api/cases/:id", isAuthenticated, async (req, res) => {
+    if (!dbConfigured()) {
+      return res.status(503).json({ message: "Saving is not configured yet (DATABASE_URL is missing)." });
+    }
+    const email = ownerEmail(req);
+    if (!email) return res.status(403).json({ message: "Sign in with Google to load saved cases." });
+    try {
+      const found = await getCase(req.params.id, email);
+      if (!found) return res.status(404).json({ message: "Case not found" });
+      res.json(found);
+    } catch (error) {
+      console.error("getCase failed:", error);
+      res.status(500).json({ message: "Failed to load case" });
+    }
+  });
+  app.post("/api/cases", isAuthenticated, async (req, res) => {
+    if (!dbConfigured()) {
+      return res.status(503).json({ message: "Saving is not configured yet (DATABASE_URL is missing)." });
+    }
+    const email = ownerEmail(req);
+    if (!email) return res.status(403).json({ message: "Sign in with Google to save study cases." });
+    const parsed = saveCaseSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.errors[0]?.message ?? "Invalid case data" });
+    }
+    try {
+      const created = await createCase(email, parsed.data.name, parsed.data.state, parsed.data.results ?? null);
+      res.status(201).json(created);
+    } catch (error) {
+      console.error("createCase failed:", error);
+      res.status(500).json({ message: "Failed to save case" });
+    }
+  });
+  app.put("/api/cases/:id", isAuthenticated, async (req, res) => {
+    if (!dbConfigured()) {
+      return res.status(503).json({ message: "Saving is not configured yet (DATABASE_URL is missing)." });
+    }
+    const email = ownerEmail(req);
+    if (!email) return res.status(403).json({ message: "Sign in with Google to update saved cases." });
+    const parsed = saveCaseSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.errors[0]?.message ?? "Invalid case data" });
+    }
+    try {
+      const updated = await updateCase(req.params.id, email, parsed.data.name, parsed.data.state, parsed.data.results ?? null);
+      if (!updated) return res.status(404).json({ message: "Case not found" });
+      res.json(updated);
+    } catch (error) {
+      console.error("updateCase failed:", error);
+      res.status(500).json({ message: "Failed to update case" });
+    }
+  });
+  app.delete("/api/cases/:id", isAuthenticated, async (req, res) => {
+    if (!dbConfigured()) {
+      return res.status(503).json({ message: "Saving is not configured yet (DATABASE_URL is missing)." });
+    }
+    const email = ownerEmail(req);
+    if (!email) return res.status(403).json({ message: "Sign in with Google to delete saved cases." });
+    try {
+      const deleted = await deleteCase(req.params.id, email);
+      if (!deleted) return res.status(404).json({ message: "Case not found" });
+      res.status(204).send();
+    } catch (error) {
+      console.error("deleteCase failed:", error);
+      res.status(500).json({ message: "Failed to delete case" });
+    }
+  });
   app.get("/api/projects", async (req, res) => {
     try {
       const projects = await storage.getAllSolarProjects();

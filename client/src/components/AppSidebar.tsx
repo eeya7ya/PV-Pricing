@@ -1,4 +1,4 @@
-import { SlidersHorizontal, BarChart3, HelpCircle, Users } from 'lucide-react';
+import { SlidersHorizontal, BarChart3, HelpCircle, Users, FolderClock, Compass } from 'lucide-react';
 import {
   Sidebar,
   SidebarContent,
@@ -28,6 +28,18 @@ const items = [
     url: 'results',
     icon: BarChart3,
     description: 'Performance, PV yield, electrical sizing and the before/after comparison'
+  },
+  {
+    title: 'Saved Cases',
+    url: 'cases',
+    icon: FolderClock,
+    description: 'Save your study cases and reopen previous ones'
+  },
+  {
+    title: 'Guide',
+    url: 'guide',
+    icon: Compass,
+    description: 'How to use the app — a quick step-by-step walkthrough'
   },
   {
     title: 'Help',
