@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import AppSidebar from '@/components/AppSidebar';
 import { Button } from '@/components/ui/button';
-import { Moon, Sun, Calculator, Play, LogOut, FileText } from 'lucide-react';
+import { Moon, Sun, Play, LogOut, FileText } from 'lucide-react';
 import { useTheme } from '@/components/ThemeProvider';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -51,8 +51,8 @@ export default function SolarCalculatorApp() {
             <div className="flex items-center gap-4">
               <SidebarTrigger data-testid="button-sidebar-toggle" />
               <div className="flex items-center gap-2">
-                <Calculator className="h-6 w-6 text-primary" />
-                <h1 className="text-xl font-semibold">Solar PV Calculator</h1>
+                <img src="/espark-logo.png" alt="eSpark" className="h-7 w-7 rounded-md object-contain" />
+                <h1 className="text-xl font-semibold">eSpark PV Calculator</h1>
                 <Badge variant="secondary" className="text-xs">Professional</Badge>
               </div>
             </div>
