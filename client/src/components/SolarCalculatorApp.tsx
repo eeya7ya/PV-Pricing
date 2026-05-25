@@ -28,6 +28,7 @@ import WelcomeDialog from '@/components/WelcomeDialog';
 import GuidedTour, { type TourStep } from '@/components/GuidedTour';
 import UserManagement from '@/pages/user-management';
 import { useAuth } from '@/hooks/use-auth';
+import { useToast } from '@/hooks/use-toast';
 
 type ActiveTab = 'inputs' | 'results' | 'cases' | 'guide' | 'help' | 'users';
 
@@ -46,6 +47,8 @@ const TOUR_STEPS: TourStep[] = [
 export default function SolarCalculatorApp() {
   const { theme, toggleTheme } = useTheme();
   const { user, logoutMutation } = useAuth();
+  const { toast } = useToast();
+  const isGuest = !user?.email;
   const [activeTab, setActiveTab] = useState<ActiveTab>('inputs');
   const [showWelcome, setShowWelcome] = useState(false);
   const [runTour, setRunTour] = useState(false);
@@ -137,11 +140,22 @@ export default function SolarCalculatorApp() {
                     </Button>
                     <Button
                       variant="outline"
-                      onClick={() => window.print()}
-                      disabled={!results}
+                      onClick={() => {
+                        if (isGuest) {
+                          toast({
+                            title: 'Sign in to export',
+                            description: 'Sign in with Google to generate and export reports. Guest sessions can’t export.',
+                          });
+                          return;
+                        }
+                        window.print();
+                      }}
+                      disabled={!isGuest && !results}
                       className="flex items-center gap-2"
                       data-testid="button-generate-report"
-                      title={results ? 'Generate a printable technical report (Save as PDF)' : 'Run a calculation first'}
+                      title={isGuest
+                        ? 'Sign in with Google to export reports'
+                        : (results ? 'Generate a printable technical report (Save as PDF)' : 'Run a calculation first')}
                     >
                       <FileText className="h-4 w-4" />
                       Generate Report
