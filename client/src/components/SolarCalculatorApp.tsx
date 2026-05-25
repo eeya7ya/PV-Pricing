@@ -52,7 +52,7 @@ export default function SolarCalculatorApp() {
               <SidebarTrigger data-testid="button-sidebar-toggle" />
               <div className="flex items-center gap-2">
                 <Calculator className="h-6 w-6 text-primary" />
-                <h1 className="text-xl font-semibold">Solar PV Calculator</h1>
+                <h1 className="text-xl font-semibold">eSpark Solar Calculator</h1>
                 <Badge variant="secondary" className="text-xs">Professional</Badge>
               </div>
             </div>
@@ -104,7 +104,7 @@ export default function SolarCalculatorApp() {
                       Generate Report
                     </Button>
                     <Button
-                      onClick={calculate}
+                      onClick={() => calculate({ onSuccess: () => setActiveTab('results') })}
                       disabled={isCalculating}
                       className="flex items-center gap-2"
                       data-testid="button-calculate"
@@ -318,6 +318,8 @@ export default function SolarCalculatorApp() {
                   consumption={state.consumption}
                   efficiency={state.efficiency}
                   degradation={state.degradation}
+                  electrical={state.electrical}
+                  targetKWp={pvKWp}
                 />
                 </>
                 );

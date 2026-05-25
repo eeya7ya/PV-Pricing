@@ -126,7 +126,7 @@ interface CalculatorLogicProps {
   children: (props: {
     state: CalculatorState;
     setState: React.Dispatch<React.SetStateAction<CalculatorState>>;
-    calculate: () => void;
+    calculate: (opts?: { onSuccess?: () => void }) => void;
     results?: CalculationResults;
     isCalculating: boolean;
     updateField: <K extends keyof CalculatorState>(field: K, value: CalculatorState[K]) => void;
@@ -778,9 +778,9 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
     }
   });
 
-  const calculate = useCallback(() => {
-    calculateMutation.mutate(state);
-  }, [state, calculateMutation, toast]);
+  const calculate = useCallback((opts?: { onSuccess?: () => void }) => {
+    calculateMutation.mutate(state, opts?.onSuccess ? { onSuccess: opts.onSuccess } : undefined);
+  }, [state, calculateMutation]);
 
   const updateField = useCallback(<K extends keyof CalculatorState>(
     field: K, 

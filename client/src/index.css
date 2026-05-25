@@ -414,6 +414,65 @@
   }
   .tr-monthly tbody td:first-child { text-align: left; font-weight: 500; }
 
+  /* ---- Performance charts ---- */
+  .tr-chart-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6mm;
+  }
+  .tr-chart {
+    border: 1px solid #e5e5e5;
+    border-radius: 2mm;
+    padding: 2mm 2mm 1mm;
+  }
+  .tr-chart-title {
+    font-size: 9pt;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 1mm;
+    text-align: center;
+  }
+  .tr-chart-legend {
+    display: flex;
+    justify-content: center;
+    gap: 6mm;
+    font-size: 8pt;
+    color: #444;
+    margin-top: 1mm;
+  }
+  .tr-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 1.5mm;
+  }
+  .tr-legend-swatch {
+    display: inline-block;
+    width: 3mm;
+    height: 3mm;
+    border-radius: 0.5mm;
+  }
+
+  /* ---- Single-line diagram ---- */
+  .tr-sld {
+    border: 1px solid #e5e5e5;
+    border-radius: 2mm;
+    padding: 3mm;
+    color: #111;
+  }
+  /* Force dark strokes/labels regardless of the on-screen theme so the
+     diagram is legible on white paper (the SVG sets its own text colour). */
+  .tr-sld svg {
+    color: #111;
+  }
+  .tr-sld svg circle {
+    fill: #fff;
+  }
+  .tr-note {
+    font-size: 8pt;
+    color: #666;
+    margin-top: 2mm;
+  }
+
   /* ---- References list ---- */
   .tr-refs {
     margin: 0;

@@ -16,6 +16,11 @@ import type {
   GridConnection,
   MonthlyConsumption,
 } from '@shared/schema';
+import {
+  electricalSLD,
+  SingleLineDiagram,
+  type ElectricalState,
+} from '@/components/ElectricalDesign';
 
 interface TechnicalReportProps {
   results: CalculationResults | undefined;
@@ -24,6 +29,74 @@ interface TechnicalReportProps {
   consumption: MonthlyConsumption;
   efficiency: number;
   degradation: number;
+  /** Electrical BoS design — used to render the single-line diagram. */
+  electrical?: ElectricalState;
+  /** System size (kWp DC) from PV Design — drives the SLD sizing. */
+  targetKWp?: number;
+}
+
+/** Lightweight print-safe SVG line chart (canvas charts don't print reliably). */
+function PrintLineChart({
+  title,
+  labels,
+  series,
+  height = 200,
+}: {
+  title: string;
+  labels: string[];
+  series: { name: string; color: string; data: number[] }[];
+  height?: number;
+}) {
+  const width = 540;
+  const pad = { l: 48, r: 14, t: 8, b: 26 };
+  const plotW = width - pad.l - pad.r;
+  const plotH = height - pad.t - pad.b;
+  const maxV = Math.max(1, ...series.flatMap((s) => s.data));
+  const n = labels.length;
+  const xAt = (i: number) => pad.l + (n <= 1 ? plotW / 2 : (plotW * i) / (n - 1));
+  const yAt = (v: number) => pad.t + plotH - (plotH * v) / maxV;
+  const ticks = 4;
+
+  return (
+    <div className="tr-chart">
+      <div className="tr-chart-title">{title}</div>
+      <svg viewBox={`0 0 ${width} ${height}`} width="100%" preserveAspectRatio="xMidYMid meet">
+        {Array.from({ length: ticks + 1 }).map((_, t) => {
+          const v = (maxV * t) / ticks;
+          const y = yAt(v);
+          return (
+            <g key={t}>
+              <line x1={pad.l} y1={y} x2={width - pad.r} y2={y} stroke="#e5e5e5" strokeWidth={1} />
+              <text x={pad.l - 6} y={y + 3} textAnchor="end" fontSize="8" fill="#666">{v.toFixed(0)}</text>
+            </g>
+          );
+        })}
+        {labels.map((lab, i) => (
+          <text key={i} x={xAt(i)} y={height - pad.b + 14} textAnchor="middle" fontSize="8" fill="#666">{lab}</text>
+        ))}
+        {series.map((s, si) => {
+          const d = s.data
+            .map((v, i) => `${i === 0 ? 'M' : 'L'} ${xAt(i).toFixed(1)} ${yAt(v).toFixed(1)}`)
+            .join(' ');
+          return (
+            <g key={si}>
+              <path d={d} fill="none" stroke={s.color} strokeWidth={2} />
+              {s.data.map((v, i) => (
+                <circle key={i} cx={xAt(i)} cy={yAt(v)} r={2} fill={s.color} />
+              ))}
+            </g>
+          );
+        })}
+      </svg>
+      <div className="tr-chart-legend">
+        {series.map((s, i) => (
+          <span key={i} className="tr-legend-item">
+            <span className="tr-legend-swatch" style={{ background: s.color }} /> {s.name}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function fmt(n: number | undefined | null, digits = 2): string {
@@ -42,10 +115,13 @@ export default function TechnicalReport({
   consumption,
   efficiency,
   degradation,
+  electrical,
+  targetKWp,
 }: TechnicalReportProps) {
   if (!results) return null;
   const s = results.annual_summary as any;
   const months = results.monthly_data;
+  const monthLabels = months.map((m) => m.month);
   const reportDate = new Date().toLocaleDateString('en-GB', {
     year: 'numeric',
     month: 'long',
@@ -61,7 +137,7 @@ export default function TechnicalReport({
       {/* Header: logo centered */}
       <header className="tr-header">
         <img src="/espark-logo.png" alt="eSpark Engineering" className="tr-logo" />
-        <h1 className="tr-title">Solar PV Technical Analysis Report</h1>
+        <h1 className="tr-title">eSpark Solar — Technical Analysis Report</h1>
         <div className="tr-subtitle">
           Jordan EMRC 2025 Tariff Guide &middot; Bylaw 58/2024 Net-Billing
         </div>
@@ -182,9 +258,43 @@ export default function TechnicalReport({
         </table>
       </section>
 
+      {/* Performance charts */}
+      <section className="tr-section tr-page-break">
+        <h2>4. Performance Charts</h2>
+        <div className="tr-chart-grid">
+          <PrintLineChart
+            title="Monthly PV generation (kWh)"
+            labels={monthLabels}
+            series={[{ name: 'Generation', color: '#f59e0b', data: months.map((m) => m.generation) }]}
+          />
+          <PrintLineChart
+            title="Monthly bill — before vs after (JD)"
+            labels={monthLabels}
+            series={[
+              { name: 'Before PV', color: '#dc2626', data: months.map((m) => m.bill_before) },
+              { name: 'After PV', color: '#16a34a', data: months.map((m) => m.bill_after) },
+            ]}
+          />
+        </div>
+      </section>
+
+      {/* Electrical single-line diagram */}
+      {electrical && (
+        <section className="tr-section">
+          <h2>5. Electrical Single-Line Diagram</h2>
+          <div className="tr-sld">
+            <SingleLineDiagram {...electricalSLD(electrical, targetKWp && targetKWp > 0 ? targetKWp : 5)} responsive />
+          </div>
+          <p className="tr-note">
+            String, cable and protection sizing per IEC 62548 / 60364. Verify against the actual
+            datasheets and DISCO connection rules before procurement.
+          </p>
+        </section>
+      )}
+
       {/* Monthly breakdown */}
       <section className="tr-section tr-page-break">
-        <h2>4. Monthly Energy Balance &amp; Billing</h2>
+        <h2>6. Monthly Energy Balance &amp; Billing</h2>
         <table className="tr-monthly">
           <thead>
             <tr>
@@ -233,7 +343,7 @@ export default function TechnicalReport({
 
       {/* Methodology references */}
       <section className="tr-section">
-        <h2>5. Regulatory References</h2>
+        <h2>7. Regulatory References</h2>
         <ul className="tr-refs">
           <li>EMRC Tariff Guide 2025 (effective 1 January 2025; Arabic prevails).</li>
           <li>NEPCO bilingual schedule.</li>

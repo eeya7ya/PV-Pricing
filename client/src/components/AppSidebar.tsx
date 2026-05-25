@@ -50,7 +50,7 @@ export default function AppSidebar({ activeTab, onTabChange, isAdmin = false }: 
     <Sidebar>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Solar PV Calculator</SidebarGroupLabel>
+          <SidebarGroupLabel>eSpark Solar Calculator</SidebarGroupLabel>
           <div className="px-3 pb-2">
             <p className="text-xs text-muted-foreground/90 font-medium tracking-wide" data-testid="text-credits-sidebar">
               Created by ENG.Yahya-Khaleld

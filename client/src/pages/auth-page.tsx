@@ -43,7 +43,7 @@ export default function AuthPage() {
               <Calculator className="relative mx-auto h-16 w-16 text-orange-400" />
             </div>
             <h2 className="mt-8 text-4xl font-bold tracking-tight text-white">
-              Solar PV Calculator
+              eSpark Solar Calculator
             </h2>
             <p className="mt-2 text-sm text-orange-300/90 font-medium tracking-wide" data-testid="text-credits-auth">
               Created by ENG.Yahya-Khaleld

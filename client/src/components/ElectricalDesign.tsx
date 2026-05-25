@@ -103,6 +103,20 @@ function buildDesign(state: ElectricalState, targetKWp: number): ElectricalDesig
   });
 }
 
+/** Everything needed to render the single-line diagram from lifted state.
+ *  Reused by the print/export technical report. */
+export function electricalSLD(state: ElectricalState, targetKWp: number) {
+  const design = buildDesign(state, targetKWp);
+  const invRec = INVERTER_LIBRARY[state.inverterId];
+  const inverter = inverterElectrical(invRec);
+  return {
+    design,
+    inverterLabel: `${invRec.brand} ${invRec.kWac} kW`,
+    acVoltageV: inverter.acVoltageV,
+    phases: invRec.phases,
+  };
+}
+
 // ===========================================================================
 // Inputs (Inputs tab)
 // ===========================================================================
@@ -402,13 +416,16 @@ export function ElectricalResults({ state, targetKWp }: { state: ElectricalState
 // ===========================================================================
 // Single-line diagram (SVG)
 // ===========================================================================
-function SingleLineDiagram({
-  design, inverterLabel, acVoltageV, phases,
+export function SingleLineDiagram({
+  design, inverterLabel, acVoltageV, phases, responsive = false,
 }: {
   design: ElectricalDesign;
   inverterLabel: string;
   acVoltageV: number;
   phases: 1 | 3;
+  /** When true, the SVG scales to its container (used in the print report)
+   *  instead of forcing its native width with horizontal scroll. */
+  responsive?: boolean;
 }) {
   const s = design.strings;
   // Layout coordinates.
@@ -436,8 +453,12 @@ function SingleLineDiagram({
   );
 
   return (
-    <div className="w-full overflow-x-auto">
-      <svg viewBox={`0 0 ${width} 170`} className="text-foreground" style={{ minWidth: width }}>
+    <div className={responsive ? 'w-full' : 'w-full overflow-x-auto'}>
+      <svg
+        viewBox={`0 0 ${width} 170`}
+        className="text-foreground"
+        style={responsive ? { width: '100%', height: 'auto' } : { minWidth: width }}
+      >
         {/* connectors first (under boxes) */}
         {connector(xs[0] + boxW, xs[1], `DC ${design.dcCable.finalSizeMm2}mm²`, `${s.stringVmpHotV.toFixed(0)}V · ${(design.dcCable.designCurrentA).toFixed(0)}A`)}
         {connector(xs[1] + boxW, xs[2], `AC ${design.acCable.finalSizeMm2}mm²`, `${design.protection.acBreakerA}A breaker`)}
