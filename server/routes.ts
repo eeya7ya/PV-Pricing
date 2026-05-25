@@ -177,6 +177,11 @@ export async function registerRoutes(app: Express): Promise<void> {
         // X2 = (consumption / 12) × mechanism-cap-fraction fallback.
         monthly_pv_generation_override: z.array(z.number().min(0)).length(12).optional(),
         kwp_dc_override: z.number().min(0).optional(),
+        // Detailed monthly mode: distribute the (flat) annual PV generation
+        // across months by these 12 normalized shares (e.g. the region's
+        // seasonal solar curve) instead of a flat consumption/12 every month.
+        // Ignored when monthly_pv_generation_override is supplied.
+        seasonal_generation_shares: z.array(z.number().min(0)).length(12).optional(),
       });
 
       // Residential 3-period validation schema
@@ -244,6 +249,7 @@ export async function registerRoutes(app: Express): Promise<void> {
         legacy_export_haircut,
         monthly_pv_generation_override,
         kwp_dc_override,
+        seasonal_generation_shares,
         // Residential 3-period factor fields (undefined for industrial)
         day_factors,
         evening_factors,
@@ -324,16 +330,30 @@ export async function registerRoutes(app: Express): Promise<void> {
         monthly_pv_generation = kwp_dc * SPECIFIC_YIELD_KWH_PER_KWP_MONTH * (efficiency / 100);
       }
 
-      // PV Design override: if a 12-vector arrived from the physics engine,
-      // use it directly (replacing the consumption-based X2 fallback). Each
-      // month gets its own value.
+      // Detailed monthly mode: normalize the seasonal share vector (defensive —
+      // shares need not sum to exactly 1 from the client).
+      const shareSum: number = seasonal_generation_shares
+        ? seasonal_generation_shares.reduce((s: number, v: number) => s + v, 0)
+        : 0;
+      const seasonalShares: number[] | null =
+        seasonal_generation_shares && shareSum > 0
+          ? seasonal_generation_shares.map((v: number) => v / shareSum)
+          : null;
+      const annual_flat_generation = monthly_pv_generation * 12;
+
+      // Per-month PV generation precedence:
+      //   1. PV Design physics override (12-vector) — used directly.
+      //   2. Detailed monthly seasonal shares — annual total spread by curve.
+      //   3. Flat consumption-based fallback — same value every month.
       const pvGenForMonth = (monthIndex: number): number =>
         monthly_pv_generation_override
           ? monthly_pv_generation_override[monthIndex]
-          : monthly_pv_generation;
+          : seasonalShares
+            ? annual_flat_generation * seasonalShares[monthIndex]
+            : monthly_pv_generation;
       const annual_pv_generation = monthly_pv_generation_override
         ? monthly_pv_generation_override.reduce((s: number, v: number) => s + v, 0)
-        : monthly_pv_generation * 12;
+        : annual_flat_generation;
       // If the design module also supplied a kWp_DC, surface it; else compute
       // from the resolved inverter kWac × DC:AC ratio.
       const final_kwp_dc = kwp_dc_override ?? kwp_dc;
@@ -365,6 +385,22 @@ export async function registerRoutes(app: Express): Promise<void> {
           kwhByPeriod: tou,
           isTemporary: is_temporary,
         });
+
+      // Map the 3 residential-style buckets (day 05–17 / evening 17–23 /
+      // night 23–05) onto the EMRC 3-period TOU windows so non-residential
+      // TOU sectors (banks, telecom, hotels, hospitals, …) price correctly
+      // through the 3-bucket path. Day (12 h) splits 9 h off-peak (05–14) +
+      // 3 h partial (14–17); evening = peak (17–23); night = partial (23–05).
+      const mapResidentialBucketsToTOU = (
+        day: number,
+        evening: number,
+        night: number,
+      ): { peak: number; partial: number; offPeak: number } => ({
+        peak: evening,
+        partial: day * 0.25 + night,
+        offPeak: day * 0.75,
+      });
+      const sectorIsTOU = sectorTariff.pricingModel === 'tou3';
 
       // Helper — export revenue for a month. Residential uses the flat NB
       // export rate; non-residential TOU may also use flat (Bylaw 58/2024
@@ -560,7 +596,8 @@ export async function registerRoutes(app: Express): Promise<void> {
           const y3 = x1 * night_factors[month];
           const total_cons = y1 + y2 + y3;
 
-          const bill_before_raw = priceMonthlyImport(total_cons);
+          const before_tou = sectorIsTOU ? mapResidentialBucketsToTOU(y1, y2, y3) : undefined;
+          const bill_before_raw = priceMonthlyImport(total_cons, before_tou);
           const before_final = finalizeBill(bill_before_raw, total_cons, mi);
           total_cost_before += before_final.finalBill;
 
@@ -579,10 +616,13 @@ export async function registerRoutes(app: Express): Promise<void> {
             Math.max(0, z1 - k1) + Math.max(0, z2 - k2) + Math.max(0, z3 - k3);
           total_export += export_energy;
 
-          const import_energy =
-            Math.max(0, y1 - k1) + Math.max(0, y2 - k2) + Math.max(0, y3 - k3);
+          const imp1 = Math.max(0, y1 - k1);
+          const imp2 = Math.max(0, y2 - k2);
+          const imp3 = Math.max(0, y3 - k3);
+          const import_energy = imp1 + imp2 + imp3;
 
-          const import_cost = import_energy > 0 ? priceMonthlyImport(import_energy) : 0;
+          const imp_tou = sectorIsTOU ? mapResidentialBucketsToTOU(imp1, imp2, imp3) : undefined;
+          const import_cost = import_energy > 0 ? priceMonthlyImport(import_energy, imp_tou) : 0;
           // M3 zero-export and M5 legacy NEM monetary-side both yield no
           // JD export revenue (M5 is settled as kWh credit elsewhere).
           const export_revenue =

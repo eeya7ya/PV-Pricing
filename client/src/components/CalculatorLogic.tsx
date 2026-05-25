@@ -26,6 +26,8 @@ import {
 import {
   quickQuoteYield,
   calculatePVYield,
+  JORDAN_REGIONS,
+  ZONE_MONTHLY_SHARES,
   type YieldResult,
 } from '@shared/jordanPVDesign';
 import { type PVDesignState, defaultPVDesignState } from '@/components/PVDesignPanel';
@@ -63,6 +65,15 @@ interface CalculatorState {
   degradation: number;
   tariffSupported: boolean;
   exportTariff: number;
+
+  // EMRC sub-sector override. 'auto' derives from customerType + tariffSupported;
+  // an explicit SectorCode lets the user pick e.g. C3 large industrial, B3 banks,
+  // D2 pre-2008 hotel, etc.
+  sector: SectorCode | 'auto';
+  // Detailed monthly mode: distribute PV generation across months by the
+  // region's seasonal solar curve (instead of a flat annual/12 every month)
+  // and expose the full per-month factor grids. Optional — off by default.
+  detailedMonthly: boolean;
   
   // Residential parameters
   dayFactors: TimeFactors;
@@ -127,6 +138,8 @@ const initialState: CalculatorState = {
   degradation: 0.05,
   tariffSupported: true,
   exportTariff: 0.05, // Default for Residential
+  sector: 'auto',
+  detailedMonthly: false,
   // Import default factors exactly as PyQt6 original
   dayFactors: { 
     Jan: 0.30, Feb: 0.30, Mar: 0.30, Apr: 0.30, May: 0.30, Jun: 0.30,
@@ -634,6 +647,23 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
         });
       }
 
+      // Resolve the EMRC sub-sector. 'auto' → derive from customer type
+      // (+ subsidized flag for residential); else honour the explicit pick.
+      const effectiveSector: SectorCode =
+        calculationData.sector === 'auto'
+          ? defaultSectorFor(calculationData.customerType as any, {
+              subsidized:
+                calculationData.customerType === 'Residential'
+                  ? calculationData.tariffSupported
+                  : undefined,
+            })
+          : calculationData.sector;
+
+      // Detailed monthly mode → seasonal generation curve (default Amman zone).
+      const seasonalShares: number[] | undefined = calculationData.detailedMonthly
+        ? ZONE_MONTHLY_SHARES[JORDAN_REGIONS.amman.zone]
+        : undefined;
+
       // Map parameters based on customer type and grid connection
       if (calculationData.customerType === 'Industrial' && calculationData.gridConnection === 'Net billing') {
         console.log('🏭 INDUSTRIAL CALCULATION: Sending native 4-period data to backend...');
@@ -666,10 +696,11 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
           // Industrial tariff configuration (from state)
           industrial_tariffs: calculationData.industrialTariffs,
           // Jordan EMRC 2025 sector dispatch + Bylaw 58/2024 mechanism
-          sector: defaultSectorFor('Industrial'),
+          sector: effectiveSector,
           net_billing_mechanism: mechanismFor(calculationData.gridConnection),
           // PF defaults to 0.90 → no penalty (NEPCO §I.1.d threshold = 0.88).
           power_factor: 0.9,
+          ...(seasonalShares && { seasonal_generation_shares: seasonalShares }),
           ...(pvDesignOverride && {
             monthly_pv_generation_override: pvDesignOverride.monthlyKWh,
             inverter_kwac: pvDesignOverride.inverterKWac,
@@ -679,11 +710,12 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
 
         console.log('🏭 INDUSTRIAL CALCULATION: Sent native 4-period data (no compression)');
       } else {
-        // Default Residential + Net Billing parameters.
-        // Sector is A1_subsidized when tariffSupported, else A2_unsubsidized.
-        const residentialSector: SectorCode = calculationData.tariffSupported
-          ? 'A1_subsidized'
-          : 'A2_unsubsidized';
+        // Residential-style 3-bucket path. Used for Residential AND the other
+        // non-industrial sectors (Commercial / Hotels / Hospitals / Agriculture):
+        // the backend prices the resolved sector, mapping the day/evening/night
+        // buckets onto EMRC TOU windows when the sector is TOU-based.
+        // 3-phase meter for non-residential; TV fee only for residential.
+        const isResidential = calculationData.customerType === 'Residential';
         requestBody = {
           consumption: calculationData.consumption,
           efficiency: calculationData.efficiency,
@@ -698,9 +730,12 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
           pv_consume_day: calculationData.pvConsumeDay,
           pv_consume_evening: calculationData.pvConsumeEvening,
           pv_consume_night: calculationData.pvConsumeNight,
-          sector: residentialSector,
+          sector: effectiveSector,
+          meter_phase: isResidential ? 1 : 3,
+          apply_tv_fee: isResidential,
           net_billing_mechanism: mechanismFor(calculationData.gridConnection),
           power_factor: 0.9,
+          ...(seasonalShares && { seasonal_generation_shares: seasonalShares }),
           ...(pvDesignOverride && {
             monthly_pv_generation_override: pvDesignOverride.monthlyKWh,
             inverter_kwac: pvDesignOverride.inverterKWac,
@@ -708,10 +743,11 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
           }),
         };
 
-        console.log('Calculating with RESIDENTIAL parameters:', {
+        console.log('Calculating with sector path:', {
           customerType: calculationData.customerType,
           gridConnection: calculationData.gridConnection,
-          sector: residentialSector,
+          sector: effectiveSector,
+          detailedMonthly: calculationData.detailedMonthly,
         });
       }
       
@@ -745,13 +781,13 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
     setState(prev => {
       const newState = { ...prev, [field]: value };
       
-      // Automatically set export tariff based on customer type
+      // Automatically set export tariff based on customer type (residential
+      // 0.050 JD/kWh, all non-residential 0.040 per Bylaw 58/2024 defaults).
+      // Reset the sub-sector to 'auto' so a stale pick from a prior type is
+      // not carried over.
       if (field === 'customerType') {
-        if (value === 'Residential') {
-          newState.exportTariff = 0.05;
-        } else if (value === 'Industrial') {
-          newState.exportTariff = 0.04;
-        }
+        newState.exportTariff = value === 'Residential' ? 0.05 : 0.04;
+        newState.sector = 'auto';
         console.log(`Auto-set export tariff to ${newState.exportTariff} for ${value} customer type`);
       }
       

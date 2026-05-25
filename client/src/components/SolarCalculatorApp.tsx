@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import AppSidebar from '@/components/AppSidebar';
 import { Button } from '@/components/ui/button';
-import { Moon, Sun, Calculator, Play, LogOut } from 'lucide-react';
+import { Moon, Sun, Calculator, Play, LogOut, FileText } from 'lucide-react';
 import { useTheme } from '@/components/ThemeProvider';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -94,15 +94,28 @@ export default function SolarCalculatorApp() {
                       <div className="space-y-6">
                         <div className="flex items-center justify-between">
                           <h2 className="text-2xl font-semibold">System Designer</h2>
-                          <Button 
-                            onClick={calculate}
-                            disabled={isCalculating}
-                            className="flex items-center gap-2"
-                            data-testid="button-calculate"
-                          >
-                            <Play className="h-4 w-4" />
-                            {isCalculating ? 'Calculating...' : 'Calculate System'}
-                          </Button>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              onClick={() => window.print()}
+                              disabled={!results}
+                              className="flex items-center gap-2"
+                              data-testid="button-generate-report"
+                              title={results ? 'Generate a printable technical report (Save as PDF)' : 'Run a calculation first'}
+                            >
+                              <FileText className="h-4 w-4" />
+                              Generate Report
+                            </Button>
+                            <Button
+                              onClick={calculate}
+                              disabled={isCalculating}
+                              className="flex items-center gap-2"
+                              data-testid="button-calculate"
+                            >
+                              <Play className="h-4 w-4" />
+                              {isCalculating ? 'Calculating...' : 'Calculate System'}
+                            </Button>
+                          </div>
                         </div>
 
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -111,8 +124,10 @@ export default function SolarCalculatorApp() {
                             <CustomerGridSelection
                               customerType={state.customerType}
                               gridConnection={state.gridConnection}
+                              sector={state.sector}
                               onCustomerTypeChange={(customerType) => updateField('customerType', customerType)}
                               onGridConnectionChange={(gridConnection) => updateField('gridConnection', gridConnection)}
+                              onSectorChange={(sector) => updateField('sector', sector)}
                             />
 
                             <MonthlyConsumptionInputs
@@ -169,6 +184,8 @@ export default function SolarCalculatorApp() {
                             <TimeParametersSection
                               customerType={state.customerType}
                               gridConnection={state.gridConnection}
+                              detailedMonthly={state.detailedMonthly}
+                              onDetailedMonthlyChange={(v) => updateField('detailedMonthly', v)}
                               // Consumption Period Factors
                               dayFactors={state.dayFactors}
                               eveningFactors={state.eveningFactors}
