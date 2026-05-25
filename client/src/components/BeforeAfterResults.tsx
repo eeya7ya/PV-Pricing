@@ -1,7 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
 import { Progress } from '@/components/ui/progress';
 import {
   TrendingUp,
@@ -19,7 +17,6 @@ import {
   Building2,
   CreditCard,
   Banknote,
-  FileDown,
 } from 'lucide-react';
 import type { CalculationResults } from '@shared/schema';
 
@@ -65,18 +62,6 @@ export default function BeforeAfterResults({
         <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
           {customerType} + PV System
         </Badge>
-        <div className="ml-auto">
-          <Button
-            onClick={() => window.print()}
-            variant="default"
-            size="sm"
-            className="gap-2"
-            data-testid="button-export-technical-report"
-          >
-            <FileDown className="h-4 w-4" />
-            Export Technical Report
-          </Button>
-        </div>
       </div>
 
       {/* Key Performance Indicators */}
