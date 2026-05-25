@@ -1,4 +1,4 @@
-import { Calculator, BarChart3, TrendingUp, GitCompare, HelpCircle, Users, Sun } from 'lucide-react';
+import { SlidersHorizontal, BarChart3, HelpCircle, Users } from 'lucide-react';
 import {
   Sidebar,
   SidebarContent,
@@ -18,34 +18,16 @@ interface AppSidebarProps {
 
 const items = [
   {
-    title: 'System Designer',
-    url: 'designer',
-    icon: Calculator,
-    description: 'Configure and design your solar PV system'
+    title: 'Inputs',
+    url: 'inputs',
+    icon: SlidersHorizontal,
+    description: 'All design inputs — consumption, tariff, PV design and electrical BoS'
   },
   {
-    title: 'PV Design',
-    url: 'pv-design',
-    icon: Sun,
-    description: 'Quick Quote (5 inputs) or Detailed Engineering — Jordan resource model'
-  },
-  {
-    title: 'Dashboard',
-    url: 'dashboard',
+    title: 'Results',
+    url: 'results',
     icon: BarChart3,
-    description: 'View system performance and results'
-  },
-  {
-    title: 'Analysis',
-    url: 'analysis',
-    icon: TrendingUp,
-    description: 'Sensitivity and ROI analysis'
-  },
-  {
-    title: 'Comparison',
-    url: 'comparison',
-    icon: GitCompare,
-    description: 'Compare different scenarios'
+    description: 'Performance, PV yield, electrical sizing and the before/after comparison'
   },
   {
     title: 'Help',

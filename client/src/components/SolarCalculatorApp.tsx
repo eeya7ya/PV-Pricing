@@ -6,31 +6,31 @@ import { Moon, Sun, Calculator, Play, LogOut, FileText } from 'lucide-react';
 import { useTheme } from '@/components/ThemeProvider';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 // Import calculator components
 import CalculatorLogic from '@/components/CalculatorLogic';
 import CustomerGridSelection from '@/components/CustomerGridSelection';
 import MonthlyConsumptionInputs from '@/components/MonthlyConsumptionInputs';
 import SystemConfiguration from '@/components/SystemConfiguration';
-import TimeFactorWidget from '@/components/TimeFactorWidget';
 import TimeParametersSection from '@/components/TimeParametersSection';
 import CircularGauge from '@/components/CircularGauge';
 import Dashboard from '@/components/Dashboard';
-import AnalysisSection from '@/components/AnalysisSection';
 import BeforeAfterResults from '@/components/BeforeAfterResults';
 import TechnicalReport from '@/components/TechnicalReport';
-import PVDesignPanel from '@/components/PVDesignPanel';
+import { PVDesignInputs, PVDesignResults, pvDesignDcKWp } from '@/components/PVDesignPanel';
+import { ElectricalInputs, ElectricalResults } from '@/components/ElectricalDesign';
 import ComparisonSection from '@/components/ComparisonSection';
 import HelpSection from '@/components/HelpSection';
 import UserManagement from '@/pages/user-management';
 import { useAuth } from '@/hooks/use-auth';
 
-type ActiveTab = 'designer' | 'pv-design' | 'dashboard' | 'analysis' | 'comparison' | 'help' | 'users';
+type ActiveTab = 'inputs' | 'results' | 'help' | 'users';
 
 export default function SolarCalculatorApp() {
   const { theme, toggleTheme } = useTheme();
   const { user, logoutMutation } = useAuth();
-  const [activeTab, setActiveTab] = useState<ActiveTab>('designer');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('inputs');
 
   const handleTabChange = (tab: string) => {
     setActiveTab(tab as ActiveTab);
@@ -86,40 +86,53 @@ export default function SolarCalculatorApp() {
           {/* Main Content */}
           <main className="flex-1 overflow-hidden">
             <CalculatorLogic>
-              {({ state, updateField, calculate, results, isCalculating }) => (
+              {({ state, updateField, calculate, results, isCalculating }) => {
+                const pvKWpRaw = pvDesignDcKWp(state.pvDesign);
+                const pvKWp = Number.isFinite(pvKWpRaw) && pvKWpRaw > 0 ? pvKWpRaw : 5;
+
+                const actionButtons = (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => window.print()}
+                      disabled={!results}
+                      className="flex items-center gap-2"
+                      data-testid="button-generate-report"
+                      title={results ? 'Generate a printable technical report (Save as PDF)' : 'Run a calculation first'}
+                    >
+                      <FileText className="h-4 w-4" />
+                      Generate Report
+                    </Button>
+                    <Button
+                      onClick={calculate}
+                      disabled={isCalculating}
+                      className="flex items-center gap-2"
+                      data-testid="button-calculate"
+                    >
+                      <Play className="h-4 w-4" />
+                      {isCalculating ? 'Calculating...' : 'Calculate System'}
+                    </Button>
+                  </div>
+                );
+
+                return (
                 <>
                 <ScrollArea className="h-full">
                   <div className="p-6">
-                    {activeTab === 'designer' && (
+                    {activeTab === 'inputs' && (
                       <div className="space-y-6">
-                        <div className="flex items-center justify-between">
-                          <h2 className="text-2xl font-semibold">System Designer</h2>
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant="outline"
-                              onClick={() => window.print()}
-                              disabled={!results}
-                              className="flex items-center gap-2"
-                              data-testid="button-generate-report"
-                              title={results ? 'Generate a printable technical report (Save as PDF)' : 'Run a calculation first'}
-                            >
-                              <FileText className="h-4 w-4" />
-                              Generate Report
-                            </Button>
-                            <Button
-                              onClick={calculate}
-                              disabled={isCalculating}
-                              className="flex items-center gap-2"
-                              data-testid="button-calculate"
-                            >
-                              <Play className="h-4 w-4" />
-                              {isCalculating ? 'Calculating...' : 'Calculate System'}
-                            </Button>
+                        <div className="flex items-center justify-between flex-wrap gap-3">
+                          <div>
+                            <h2 className="text-2xl font-semibold">Inputs</h2>
+                            <p className="text-sm text-muted-foreground">
+                              Everything the calculation needs — set it here, then view outputs under Results.
+                            </p>
                           </div>
+                          {actionButtons}
                         </div>
 
+                        {/* Tariff, consumption & system parameters */}
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                          {/* Left Panel - Inputs */}
                           <div className="space-y-6">
                             <CustomerGridSelection
                               customerType={state.customerType}
@@ -134,14 +147,12 @@ export default function SolarCalculatorApp() {
                               consumption={state.consumption}
                               onChange={(consumption) => updateField('consumption', consumption)}
                             />
-                            
+
                             <SystemConfiguration
                               efficiency={state.efficiency}
                               degradation={state.degradation}
                               tariffSupported={state.tariffSupported}
                               exportTariff={state.exportTariff}
-                              pvSize={results?.annual_summary.pv_size}
-                              inverterSize={results?.annual_summary.inverter_size}
                               customerType={state.customerType}
                               gridConnection={state.gridConnection}
                               industrialBassConfig={state.industrialBassConfig}
@@ -153,34 +164,7 @@ export default function SolarCalculatorApp() {
                             />
                           </div>
 
-                          {/* Right Panel - Live Preview */}
                           <div className="space-y-6">
-                            {/* Gauges */}
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                              <CircularGauge
-                                title="Power Generation"
-                                value={results?.annual_summary.pv_size || 0}
-                                max={1000}
-                                unit="kWh"
-                                variant="chart-1"
-                              />
-                              <CircularGauge
-                                title="System Efficiency"
-                                value={state.efficiency}
-                                max={100}
-                                unit="%"
-                                variant="chart-2"
-                              />
-                              <CircularGauge
-                                title="Annual Savings"
-                                value={results?.annual_summary.annual_savings || 0}
-                                max={5000}
-                                unit="JD"
-                                variant="chart-3"
-                              />
-                            </div>
-
-                            {/* Time Period Parameters Section - Modular Design */}
                             <TimeParametersSection
                               customerType={state.customerType}
                               gridConnection={state.gridConnection}
@@ -190,7 +174,7 @@ export default function SolarCalculatorApp() {
                               dayFactors={state.dayFactors}
                               eveningFactors={state.eveningFactors}
                               nightFactors={state.nightFactors}
-                              // Industrial Period Factors  
+                              // Industrial Period Factors
                               period1Factors={state.period1Factors}
                               period2Factors={state.period2Factors}
                               period3Factors={state.period3Factors}
@@ -216,64 +200,102 @@ export default function SolarCalculatorApp() {
                               // Update handler
                               updateField={updateField}
                             />
-
-
                           </div>
                         </div>
+
+                        {/* PV design inputs (Quick Quote / Detailed Engineering) */}
+                        <PVDesignInputs
+                          state={state.pvDesign}
+                          onChange={(pv) => updateField('pvDesign', pv)}
+                        />
+
+                        {/* Electrical BoS inputs (module + inverter selection) */}
+                        <ElectricalInputs
+                          state={state.electrical}
+                          onChange={(e) => updateField('electrical', e)}
+                          targetKWp={pvKWp}
+                        />
                       </div>
                     )}
 
-                    {activeTab === 'pv-design' && (
-                      <PVDesignPanel
-                        state={state.pvDesign}
-                        onChange={(pv) => updateField('pvDesign', pv)}
-                      />
-                    )}
-
-                    {activeTab === 'dashboard' && (
+                    {activeTab === 'results' && (
                       <div className="space-y-6">
-                        {results ? (
-                          <div className="space-y-8">
-                            {/* Original Dashboard Charts */}
-                            <Dashboard results={results} />
-                            
-                            {/* Enhanced Results Summary */}
-                            <BeforeAfterResults 
-                              results={results}
-                              customerType={state.customerType}
-                              totalConsumption={Object.values(state.consumption).reduce((sum: number, val: any) => sum + val, 0)}
-                            />
-                          </div>
-                        ) : (
-                          <div className="text-center py-12">
-                            <h2 className="text-2xl font-semibold mb-4">System Performance Dashboard</h2>
-                            <p className="text-muted-foreground">
-                              Configure your system parameters and click "Calculate System" to view comprehensive results.
+                        <div className="flex items-center justify-between flex-wrap gap-3">
+                          <div>
+                            <h2 className="text-2xl font-semibold">Results</h2>
+                            <p className="text-sm text-muted-foreground">
+                              Outputs only. Adjust anything under Inputs and recalculate.
                             </p>
                           </div>
-                        )}
+                          {actionButtons}
+                        </div>
+
+                        <Tabs defaultValue="performance" className="w-full">
+                          <TabsList className="grid w-full grid-cols-2 md:grid-cols-4">
+                            <TabsTrigger value="performance" data-testid="subtab-performance">Performance</TabsTrigger>
+                            <TabsTrigger value="pv-yield" data-testid="subtab-pv-yield">PV Yield</TabsTrigger>
+                            <TabsTrigger value="electrical" data-testid="subtab-electrical">Electrical &amp; BoS</TabsTrigger>
+                            <TabsTrigger value="comparison" data-testid="subtab-comparison">Comparison</TabsTrigger>
+                          </TabsList>
+
+                          {/* ---- Performance ---- */}
+                          <TabsContent value="performance" className="space-y-8 mt-6">
+                            {results ? (
+                              <>
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                  <CircularGauge
+                                    title="Power Generation"
+                                    value={results.annual_summary.pv_size || 0}
+                                    max={1000}
+                                    unit="kWh"
+                                    variant="chart-1"
+                                  />
+                                  <CircularGauge
+                                    title="System Efficiency"
+                                    value={state.efficiency}
+                                    max={100}
+                                    unit="%"
+                                    variant="chart-2"
+                                  />
+                                  <CircularGauge
+                                    title="Annual Savings"
+                                    value={results.annual_summary.annual_savings || 0}
+                                    max={5000}
+                                    unit="JD"
+                                    variant="chart-3"
+                                  />
+                                </div>
+                                <Dashboard results={results} />
+                                <BeforeAfterResults
+                                  results={results}
+                                  customerType={state.customerType}
+                                  totalConsumption={Object.values(state.consumption).reduce((sum: number, val: any) => sum + val, 0)}
+                                />
+                              </>
+                            ) : (
+                              <NoResults />
+                            )}
+                          </TabsContent>
+
+                          {/* ---- PV Yield (computed live from PV design inputs) ---- */}
+                          <TabsContent value="pv-yield" className="space-y-6 mt-6">
+                            <PVDesignResults state={state.pvDesign} />
+                          </TabsContent>
+
+                          {/* ---- Electrical & BoS (computed live from electrical inputs) ---- */}
+                          <TabsContent value="electrical" className="space-y-6 mt-6">
+                            <ElectricalResults state={state.electrical} targetKWp={pvKWp} />
+                          </TabsContent>
+
+                          {/* ---- Comparison (current calculation) ---- */}
+                          <TabsContent value="comparison" className="space-y-6 mt-6">
+                            <ComparisonSection
+                              results={results ?? null}
+                              customerType={state.customerType}
+                            />
+                          </TabsContent>
+                        </Tabs>
                       </div>
-                    )}
-
-                    {activeTab === 'analysis' && (
-                      <AnalysisSection
-                        customerType={state.customerType}
-                        gridConnection={state.gridConnection}
-                        results={results}
-                        efficiency={state.efficiency}
-                        degradation={state.degradation}
-                        tariffSupported={state.tariffSupported}
-                        exportTariff={state.exportTariff}
-                        consumption={state.consumption}
-                        industrialTariffs={state.industrialTariffs}
-                      />
-                    )}
-
-                    {activeTab === 'comparison' && (
-                      <ComparisonSection 
-                        results={results}
-                        customerType={state.customerType}
-                      />
                     )}
 
                     {activeTab === 'help' && (
@@ -298,11 +320,24 @@ export default function SolarCalculatorApp() {
                   degradation={state.degradation}
                 />
                 </>
-              )}
+                );
+              }}
             </CalculatorLogic>
           </main>
         </div>
       </div>
     </SidebarProvider>
+  );
+}
+
+function NoResults() {
+  return (
+    <div className="text-center py-12">
+      <h2 className="text-2xl font-semibold mb-4">No results yet</h2>
+      <p className="text-muted-foreground">
+        Configure your system under <strong>Inputs</strong> and click "Calculate System" to view
+        comprehensive performance results.
+      </p>
+    </div>
   );
 }

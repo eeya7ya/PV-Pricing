@@ -187,6 +187,19 @@
     @apply hidden;
   }
 
+  /* Hide the native number-input spinner arrows. They render as oversized,
+     low-contrast chrome on focus (esp. dark mode) and clash with the design
+     system. Values are still editable by typing, arrow keys and scroll. */
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+
   /* Placeholder styling for contentEditable div */
   [contenteditable][data-placeholder]:empty::before {
     content: attr(data-placeholder);
