@@ -37,19 +37,18 @@ export default function BeforeAfterResults({
   const { annual_summary, monthly_data, net_billing_enabled } = results;
   
   // Calculate key metrics
-  const roiPercentage = annual_summary.cost_before > 0 ? 
+  const roiPercentage = annual_summary.cost_before > 0 ?
     (annual_summary.annual_savings / annual_summary.cost_before) * 100 : 0;
-  
-  const paybackPeriod = annual_summary.annual_savings > 0 ? 
-    (annual_summary.pv_size * 1000) / annual_summary.annual_savings : 0; // Rough estimate
-  
+
   const selfConsumptionPercentage = annual_summary.annual_generation > 0 ?
     (annual_summary.total_self_consumption / annual_summary.annual_generation) * 100 : 0;
 
-  // Get months with highest and lowest bills
-  const sortedByBillAfter = [...monthly_data].sort((a, b) => b.bill_after - a.bill_after);
-  const highestBillMonth = sortedByBillAfter[0];
-  const lowestBillMonth = sortedByBillAfter[sortedByBillAfter.length - 1];
+  // Best performance = the month that saves the most money.
+  const bestMonth = [...monthly_data].sort((a, b) => b.savings - a.savings)[0];
+  // Peak month = the month with the highest pre-solar bill (highest demand),
+  // so the before→after contrast is meaningful (sorting by the after-bill is
+  // useless once net-billing flattens most months to the minimum bill).
+  const peakMonth = [...monthly_data].sort((a, b) => b.bill_before - a.bill_before)[0];
 
   // Calculate total credits generated and used (if net billing enabled)
   const totalCreditsGenerated = net_billing_enabled ? 
@@ -95,7 +94,7 @@ export default function BeforeAfterResults({
             </div>
             <div className="mt-2">
               <Badge variant="secondary" className="text-xs">
-                {roiPercentage.toFixed(1)}% ROI
+                {roiPercentage.toFixed(0)}% lower bills
               </Badge>
             </div>
           </CardContent>
@@ -285,13 +284,13 @@ export default function BeforeAfterResults({
               </div>
             </div>
             
-            {annual_summary.net_billing_savings && annual_summary.net_billing_savings > 0 && (
+            {(annual_summary.net_billing_savings ?? 0) > 0 && (
               <div className="p-4 bg-gradient-to-r from-green-50 to-blue-50 dark:from-green-900/20 dark:to-blue-900/20 rounded-lg border">
                 <div className="flex items-center gap-3">
                   <TrendingUp className="h-5 w-5 text-green-600" />
                   <div>
                     <div className="font-semibold text-green-700 dark:text-green-300">
-                      Additional Net Billing Savings: {annual_summary.net_billing_savings.toFixed(0)} JD
+                      Additional Net Billing Savings: {(annual_summary.net_billing_savings ?? 0).toFixed(0)} JD
                     </div>
                     <div className="text-sm text-muted-foreground">
                       Total savings with net billing: {(annual_summary.total_savings_with_net_billing || annual_summary.annual_savings).toFixed(0)} JD
@@ -318,15 +317,15 @@ export default function BeforeAfterResults({
               <h4 className="font-semibold text-muted-foreground">Best Performance Month</h4>
               <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200">
                 <div className="flex justify-between items-center">
-                  <span className="font-medium">{lowestBillMonth.month}</span>
+                  <span className="font-medium">{bestMonth.month}</span>
                   <Badge variant="secondary" className="bg-green-100 text-green-800">
-                    Lowest Bill
+                    Top Savings
                   </Badge>
                 </div>
                 <div className="mt-2 space-y-1 text-sm">
-                  <div>Electricity Bill: {lowestBillMonth.bill_after.toFixed(0)} JD</div>
-                  <div>Savings: {lowestBillMonth.savings.toFixed(0)} JD</div>
-                  <div>Self Consumption: {lowestBillMonth.self_consumption.toFixed(0)} kWh</div>
+                  <div>Savings: {bestMonth.savings.toFixed(0)} JD</div>
+                  <div>Bill after solar: {bestMonth.bill_after.toFixed(0)} JD</div>
+                  <div>Self consumption: {bestMonth.self_consumption.toFixed(0)} kWh</div>
                 </div>
               </div>
             </div>
@@ -335,15 +334,15 @@ export default function BeforeAfterResults({
               <h4 className="font-semibold text-muted-foreground">Highest Bill Month</h4>
               <div className="p-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg border border-orange-200">
                 <div className="flex justify-between items-center">
-                  <span className="font-medium">{highestBillMonth.month}</span>
+                  <span className="font-medium">{peakMonth.month}</span>
                   <Badge variant="secondary" className="bg-orange-100 text-orange-800">
                     Peak Demand
                   </Badge>
                 </div>
                 <div className="mt-2 space-y-1 text-sm">
-                  <div>Electricity Bill: {highestBillMonth.bill_after.toFixed(0)} JD</div>
-                  <div>Consumption: {highestBillMonth.consumption.toFixed(0)} kWh</div>
-                  <div>Import: {highestBillMonth.import.toFixed(0)} kWh</div>
+                  <div>Bill before solar: {peakMonth.bill_before.toFixed(0)} JD</div>
+                  <div>Bill after solar: {peakMonth.bill_after.toFixed(0)} JD</div>
+                  <div>Consumption: {peakMonth.consumption.toFixed(0)} kWh</div>
                 </div>
               </div>
             </div>
