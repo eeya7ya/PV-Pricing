@@ -130,6 +130,7 @@ interface CalculatorLogicProps {
     results?: CalculationResults;
     isCalculating: boolean;
     updateField: <K extends keyof CalculatorState>(field: K, value: CalculatorState[K]) => void;
+    loadCase: (state: Partial<CalculatorState>, results?: CalculationResults) => void;
   }) => React.ReactNode;
 }
 
@@ -782,6 +783,13 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
     calculateMutation.mutate(state, opts?.onSuccess ? { onSuccess: opts.onSuccess } : undefined);
   }, [state, calculateMutation]);
 
+  // Restore a saved study case. Merge over initialState so cases saved with an
+  // older state shape still load cleanly (missing fields fall back to defaults).
+  const loadCase = useCallback((saved: Partial<CalculatorState>, savedResults?: CalculationResults) => {
+    setState({ ...initialState, ...saved });
+    setResults(savedResults);
+  }, []);
+
   const updateField = useCallback(<K extends keyof CalculatorState>(
     field: K, 
     value: CalculatorState[K]
@@ -812,7 +820,8 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
         calculate,
         results,
         isCalculating: calculateMutation.isPending,
-        updateField
+        updateField,
+        loadCase
       })}
     </>
   );

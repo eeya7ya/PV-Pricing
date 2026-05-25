@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import AppSidebar from '@/components/AppSidebar';
 import { Button } from '@/components/ui/button';
-import { Moon, Sun, Calculator, Play, LogOut, FileText } from 'lucide-react';
+import { Moon, Sun, Calculator, Play, LogOut, FileText, Save } from 'lucide-react';
 import { useTheme } from '@/components/ThemeProvider';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -22,15 +22,48 @@ import { PVDesignInputs, PVDesignResults, pvDesignDcKWp } from '@/components/PVD
 import { ElectricalInputs, ElectricalResults } from '@/components/ElectricalDesign';
 import ComparisonSection from '@/components/ComparisonSection';
 import HelpSection from '@/components/HelpSection';
+import SavedCasesPanel from '@/components/SavedCasesPanel';
+import GuideSection from '@/components/GuideSection';
+import WelcomeDialog from '@/components/WelcomeDialog';
+import GuidedTour, { type TourStep } from '@/components/GuidedTour';
 import UserManagement from '@/pages/user-management';
 import { useAuth } from '@/hooks/use-auth';
 
-type ActiveTab = 'inputs' | 'results' | 'help' | 'users';
+type ActiveTab = 'inputs' | 'results' | 'cases' | 'guide' | 'help' | 'users';
+
+const WELCOME_FLAG = 'espark_welcome_seen_v1';
+
+const TOUR_STEPS: TourStep[] = [
+  { selector: '[data-testid="nav-inputs"]', title: 'Start with Inputs', body: 'All design inputs live here — customer type, grid connection, monthly consumption, PV design and electrical.' },
+  { selector: '[data-testid="button-calculate"]', title: 'Calculate the system', body: 'Once your inputs are set, click Calculate System to compute bills, savings and payback.' },
+  { selector: '[data-testid="nav-results"]', title: 'Review Results', body: 'Open Results to see performance gauges, monthly breakdowns, PV yield and electrical sizing.' },
+  { selector: '[data-testid="button-generate-report"]', title: 'Export a report', body: 'Generate a printable technical report — choose “Save as PDF” to share it with the customer.' },
+  { selector: '[data-testid="button-save-header"]', title: 'Save your work', body: 'Save the study case to your Google account so you can reopen it later, on any device.' },
+  { selector: '[data-testid="nav-cases"]', title: 'Your saved cases', body: 'All your previous study cases live here. Open one to restore its inputs and results.' },
+  { selector: '[data-testid="nav-guide"]', title: 'Need help later?', body: 'The Guide tab has this walkthrough in writing any time you need it.' },
+];
 
 export default function SolarCalculatorApp() {
   const { theme, toggleTheme } = useTheme();
   const { user, logoutMutation } = useAuth();
   const [activeTab, setActiveTab] = useState<ActiveTab>('inputs');
+  const [showWelcome, setShowWelcome] = useState(false);
+  const [runTour, setRunTour] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem(WELCOME_FLAG)) setShowWelcome(true);
+    } catch {
+      /* localStorage unavailable — skip the welcome popup */
+    }
+  }, []);
+
+  const markWelcomeSeen = () => {
+    try { localStorage.setItem(WELCOME_FLAG, '1'); } catch { /* ignore */ }
+  };
+  const dismissWelcome = () => { markWelcomeSeen(); setShowWelcome(false); };
+  const startTour = () => { markWelcomeSeen(); setShowWelcome(false); setActiveTab('inputs'); setRunTour(true); };
+  const openGuide = () => { markWelcomeSeen(); setShowWelcome(false); setActiveTab('guide'); };
 
   const handleTabChange = (tab: string) => {
     setActiveTab(tab as ActiveTab);
@@ -86,12 +119,22 @@ export default function SolarCalculatorApp() {
           {/* Main Content */}
           <main className="flex-1 overflow-hidden">
             <CalculatorLogic>
-              {({ state, updateField, calculate, results, isCalculating }) => {
+              {({ state, updateField, calculate, results, isCalculating, loadCase }) => {
                 const pvKWpRaw = pvDesignDcKWp(state.pvDesign);
                 const pvKWp = Number.isFinite(pvKWpRaw) && pvKWpRaw > 0 ? pvKWpRaw : 5;
 
                 const actionButtons = (
                   <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => setActiveTab('cases')}
+                      className="flex items-center gap-2"
+                      data-testid="button-save-header"
+                      title="Save this study case to your account"
+                    >
+                      <Save className="h-4 w-4" />
+                      Save Case
+                    </Button>
                     <Button
                       variant="outline"
                       onClick={() => window.print()}
@@ -298,6 +341,21 @@ export default function SolarCalculatorApp() {
                       </div>
                     )}
 
+                    {activeTab === 'cases' && (
+                      <SavedCasesPanel
+                        currentState={state}
+                        currentResults={results}
+                        onLoad={(savedState, savedResults) => {
+                          loadCase(savedState, savedResults);
+                          setActiveTab('inputs');
+                        }}
+                      />
+                    )}
+
+                    {activeTab === 'guide' && (
+                      <GuideSection onStartTour={startTour} />
+                    )}
+
                     {activeTab === 'help' && (
                       <HelpSection />
                     )}
@@ -325,6 +383,14 @@ export default function SolarCalculatorApp() {
                 );
               }}
             </CalculatorLogic>
+
+            <WelcomeDialog
+              open={showWelcome}
+              onClose={dismissWelcome}
+              onStartTour={startTour}
+              onOpenGuide={openGuide}
+            />
+            <GuidedTour run={runTour} steps={TOUR_STEPS} onFinish={() => setRunTour(false)} />
           </main>
         </div>
       </div>

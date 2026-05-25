@@ -1,688 +1,799 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+/**
+ * Help & Methodology — ETAP-style documentation browser.
+ *
+ * Left rail: searchable, grouped topic tree. A dedicated "Calculation Paths"
+ * group lets the user pick the grid mechanism (Net Billing / Wheeling / Zero
+ * Export / Buy-All-Sell-All / Legacy NEM) and read exactly how that path is
+ * computed. Right pane: the selected topic's step-by-step equations, defaults
+ * and notes, kept in sync with the live engine (EMRC 2025 / Bylaw 58/2024).
+ *
+ * Methodology source of truth: CALCULATIONS.md + shared/jordanTariffs.ts,
+ * shared/jordanPVDesign.ts, shared/pvElectrical.ts.
+ */
+
+import { useMemo, useState } from 'react';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-import { 
-  Calculator, 
-  Zap, 
-  DollarSign, 
-  Clock, 
-  Sun, 
-  Home, 
-  Building2,
-  TrendingUp,
-  Info,
-  BookOpen,
-  FileText
+import {
+  BookOpen, Workflow, Ruler, Sun, Grid3x3, Split, Layers,
+  Network, Ban, ArrowLeftRight, Repeat, Zap,
+  DollarSign, Receipt, Wallet, Gauge,
+  PlugZap, Cable, ShieldCheck, TrendingUp, Calculator,
+  Settings, FileText, Search, ChevronLeft, ChevronRight,
+  type LucideIcon,
 } from 'lucide-react';
 
-export default function HelpSection() {
+// ===========================================================================
+// Presentational helpers
+// ===========================================================================
+function Eq({ children }: { children: React.ReactNode }) {
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-3">
+    <pre className="font-mono text-[13px] leading-relaxed bg-muted/60 border rounded-md p-3 overflow-x-auto whitespace-pre-wrap">
+      {children}
+    </pre>
+  );
+}
+
+function Steps({ children }: { children: React.ReactNode }) {
+  return <ol className="space-y-3 list-none m-0 p-0">{children}</ol>;
+}
+
+function Step({ n, title, children }: { n: number; title: string; children?: React.ReactNode }) {
+  return (
+    <li className="flex gap-3">
+      <span className="flex-none mt-0.5 h-6 w-6 rounded-full bg-primary/15 text-primary text-xs font-bold grid place-items-center">
+        {n}
+      </span>
+      <div className="space-y-2 min-w-0 flex-1">
+        <div className="font-medium">{title}</div>
+        {children}
+      </div>
+    </li>
+  );
+}
+
+type Tone = 'info' | 'warn' | 'ok';
+function Callout({ tone = 'info', title, children }: { tone?: Tone; title?: string; children: React.ReactNode }) {
+  const map: Record<Tone, string> = {
+    info: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-200',
+    warn: 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-200',
+    ok: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-700 dark:text-green-200',
+  };
+  return (
+    <div className={`text-sm rounded-lg border p-3 ${map[tone]}`}>
+      {title && <div className="font-semibold mb-1">{title}</div>}
+      <div className="space-y-1">{children}</div>
+    </div>
+  );
+}
+
+function PTable({ head, rows }: { head: string[]; rows: (string | React.ReactNode)[][] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="border-b text-left text-muted-foreground">
+            {head.map((h, i) => (
+              <th key={i} className="py-1.5 pr-4 font-medium">{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className="border-b last:border-0">
+              {r.map((c, j) => (
+                <td key={j} className={`py-1.5 pr-4 ${j === 0 ? 'font-medium' : 'font-mono text-[13px]'}`}>{c}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Lead({ children }: { children: React.ReactNode }) {
+  return <p className="text-sm text-muted-foreground">{children}</p>;
+}
+
+// ===========================================================================
+// Topic model
+// ===========================================================================
+interface Topic {
+  id: string;
+  title: string;
+  group: string;
+  icon: LucideIcon;
+  keywords?: string;
+  body: () => JSX.Element;
+}
+
+const GROUP_ORDER = [
+  'Getting started',
+  'System sizing',
+  'Energy allocation',
+  'Calculation paths',
+  'Tariffs & billing',
+  'Electrical BoS',
+  'Financials',
+  'Reference',
+] as const;
+
+const TOPICS: Topic[] = [
+  // ---- Getting started ----------------------------------------------------
+  {
+    id: 'overview', group: 'Getting started', icon: Workflow, title: 'How the calculator works',
+    keywords: 'pipeline stages overview model',
+    body: () => (
+      <div className="space-y-4">
+        <Lead>
+          A deterministic, monthly energy-balance model. Every result is produced by the same
+          three-stage pipeline — pick your grid mechanism under <strong>Calculation Paths</strong>
+          to see how a specific path runs end to end.
+        </Lead>
+        <Steps>
+          <Step n={1} title="Sizing">
+            <Lead>From annual consumption, derive the target monthly PV generation <code>X₂</code> and an approximate inverter rating (or use the PV Design physics engine).</Lead>
+          </Step>
+          <Step n={2} title="Energy allocation">
+            <Lead>For each month, split consumption and PV generation into time-of-use buckets (3 for residential, 4 for industrial), then compute self-consumption, export and import.</Lead>
+          </Step>
+          <Step n={3} title="Billing & finance">
+            <Lead>Price the before/after flows with the resolved EMRC sector tariff, run the Bylaw 58/2024 credit ledger, add universal regulated charges, enforce the minimum bill, apply the power-factor surcharge, deduct credits, then layer the grid-service fee — and finally compute savings, NPV and payback.</Lead>
+          </Step>
+        </Steps>
+        <Eq>{`consumption ─┐
+              ├─▶ [1 SIZING] ─▶ X₂, kWp, inverter
+PV design ───┘                       │
+                                     ▼
+            [2 ALLOCATION]  y_i (load) · z_i (PV) · k_i (self-use) · export · import
+                                     │
+                                     ▼
+            [3 BILLING]  tariff → credit ledger → add-ons → min-bill → PF → grid-fee
+                                     │
+                                     ▼
+                         savings · NPV · payback · LCOE`}</Eq>
+      </div>
+    ),
+  },
+  {
+    id: 'glossary', group: 'Getting started', icon: BookOpen, title: 'Symbols & units',
+    keywords: 'notation symbols units legend',
+    body: () => (
+      <div className="space-y-4">
+        <Lead>Energies in kWh, power in kW, currency in JD. Sector rates are stored in fils/kWh (1 JD = 1000 fils).</Lead>
+        <PTable
+          head={['Symbol', 'Meaning']}
+          rows={[
+            ['Cₘ', 'consumption in month m (kWh)'],
+            ['C_annual', 'Σ Cₘ over 12 months'],
+            ['X₂', 'target monthly PV generation (kWh/month)'],
+            ['α', 'mechanism generation-cap fraction (see Sizing → X₂)'],
+            ['kWp_DC', 'DC array nameplate'],
+            ['P_inv', 'inverter rating (kWac)'],
+            ['η', 'system efficiency (default 0.95)'],
+            ['r', 'DC:AC ratio (1.5 residential / 1.2 other)'],
+            ['yᵢ', 'consumption in bucket i'],
+            ['zᵢ', 'PV generation in bucket i'],
+            ['ρᵢ', 'PV self-consumption factor for bucket i'],
+            ['kᵢ', 'self-consumed PV in bucket i = min(zᵢ·ρᵢ, yᵢ)'],
+            ['t_exp', 'export tariff (0.05 res / 0.04 non-res JD/kWh)'],
+            ['S', 'running net-billing credit balance (JD)'],
+            ['F_grid', 'annual grid-service fee (JD)'],
+          ]}
+        />
+      </div>
+    ),
+  },
+
+  // ---- System sizing ------------------------------------------------------
+  {
+    id: 'sizing-x2', group: 'System sizing', icon: Ruler, title: 'Target generation X₂',
+    keywords: 'x2 sizing cap mechanism fraction annual consumption',
+    body: () => (
+      <div className="space-y-4">
+        <Lead>X₂ is the prosumer's average monthly consumption scaled by the mechanism's generation-cap fraction α.</Lead>
+        <Eq>{`C_annual = Σ Cₘ   (m = 1…12)
+
+X₂ = α(mechanism, class) · C_annual / 12`}</Eq>
+        <PTable
+          head={['Mechanism', 'Residential', 'Non-residential']}
+          rows={[
+            ['M1 Wheeling (off-site)', 'n/a (excluded)', '50 %'],
+            ['M2 Net Billing (on-site)', '100 %', '50 %'],
+            ['M3 Zero Export', '100 %', '100 %'],
+            ['M4 Buy-All / Sell-All', '100 %', '100 %'],
+            ['M5 Legacy Net Metering', '100 %', '100 %'],
+          ]}
+        />
+        <Callout tone="info" title="Monthly shape">
+          By default each month gets the same X₂ (flat annual ÷ 12). The <strong>Detailed monthly
+          distribution</strong> toggle instead spreads the same annual total by the region's seasonal
+          solar curve. When the <strong>PV Design</strong> engine is applied to billing, its
+          region × tilt × loss-chain monthly vector overrides both.
+        </Callout>
+      </div>
+    ),
+  },
+  {
+    id: 'sizing-inverter', group: 'System sizing', icon: Calculator, title: 'Inverter sizing & cap',
+    keywords: 'inverter kwac dc ac ratio cap residential 3.6 10',
+    body: () => (
+      <div className="space-y-4">
+        <Lead>Derived from the EMRC standard specific yield of 150 kWh/kWp·month (1,800 kWh/kWp·year) and the sector DC:AC ratio.</Lead>
+        <Eq>{`kWp_DC = X₂ / 150
+P_inv  = (kWp_DC / r) · (1 / η)
+
+r = 1.5 (residential) | 1.2 (other)
+η = 0.95 (default)`}</Eq>
+        <Callout tone="warn" title="Residential inverter cap (Bylaw 58/2024)">
+          Single-phase ≤ <strong>3.6 kWac</strong> (≈ 5.4 kWp DC) · three-phase ≤ <strong>10 kWac</strong> (≈ 15 kWp DC).
+          If the cap binds, X₂ is re-derived from the capped inverter: <code>X₂ = P_inv,cap · r · 150 · η</code>.
+          Non-residential sectors have no hard kWac cap (constrained by the grid-impact study).
+        </Callout>
+        <Callout tone="info" title="Subsidy-loss trigger">
+          A single-phase residential inverter &gt; 3.6 kWac moves the customer from the subsidized A1
+          tariff onto the unsubsidized A2 tariff, regardless of mechanism.
+        </Callout>
+      </div>
+    ),
+  },
+  {
+    id: 'sizing-pvdesign', group: 'System sizing', icon: Sun, title: 'PV Design physics engine',
+    keywords: 'pvout tilt azimuth loss chain performance ratio yield region',
+    body: () => (
+      <div className="space-y-4">
+        <Lead>
+          The optional PV Design module replaces the consumption-based X₂ with a physics yield from the
+          Jordan resource model. Two tiers share one engine.
+        </Lead>
+        <Steps>
+          <Step n={1} title="Resource & geometry">
+            <Lead>Start from the region's fixed-tilt PVOUT (kWh/kWp·yr), then apply the tilt/azimuth transposition and the mounting gain (fixed ×1.00 / HSAT ×1.18 / dual-axis ×1.30).</Lead>
+          </Step>
+          <Step n={2} title="Loss chain">
+            <Lead>Apply the multiplicative loss stages: soiling, near/horizon/inter-row shading, temperature, module mismatch & tolerance, LID, spectral/IAM/low-irradiance optical losses, DC + AC + transformer wiring, inverter η_EU & MPPT, availability. Bifacial adds a gain.</Lead>
+          </Step>
+          <Step n={3} title="Yield">
+            <Lead>specific yield = PVOUT × Π(stages); annual = kWp_DC × specific yield; monthly via the zone seasonal-share vector.</Lead>
+          </Step>
+        </Steps>
+        <Callout tone="info" title="Quick Quote vs Detailed">
+          Quick Quote uses a single Performance-Ratio shortcut (default 0.78 res-rooftop) instead of the
+          full loss chain. Detailed Engineering exposes every factor. Both produce the same
+          <code> YieldResult</code> shape, shown under Results → PV Yield.
+        </Callout>
+      </div>
+    ),
+  },
+
+  // ---- Energy allocation --------------------------------------------------
+  {
+    id: 'alloc-residential', group: 'Energy allocation', icon: Grid3x3, title: 'Residential — 3 buckets',
+    keywords: 'day evening night factors self consumption residential',
+    body: () => (
+      <div className="space-y-4">
+        <Lead>Consumption x₁ = Cₘ and generation x₂ = X₂ are split into Day / Evening / Night by editable monthly factors.</Lead>
+        <Eq>{`yᵢ = x₁ · f_cons[i, m]        (load split)
+zᵢ = x₂ · f_gen[i, m]         (PV split)
+kᵢ = min(zᵢ · ρᵢ,m , yᵢ)      (self-consumption, capped at load)`}</Eq>
+        <PTable
+          head={['Bucket', 'Window', 'Default load', 'Default PV self-use ρ']}
+          rows={[
+            ['Day', '05–17', '30 %', '70 %'],
+            ['Evening', '17–23', '30 %', '90 %'],
+            ['Night', '23–05', '40 %', '100 %'],
+          ]}
+        />
+        <Callout tone="info">Load factors must sum to 1.0 (100 %) per month.</Callout>
+      </div>
+    ),
+  },
+  {
+    id: 'alloc-industrial', group: 'Energy allocation', icon: Layers, title: 'Industrial — 4 buckets → TOU',
+    keywords: 'industrial four period off peak partial peak mapping tou',
+    body: () => (
+      <div className="space-y-4">
+        <Lead>Industrial inputs keep four monthly fractions. Pricing maps them onto EMRC's 3-period TOU.</Lead>
+        <PTable
+          head={['Index', 'Period', 'Window']}
+          rows={[
+            ['1', 'Off-peak', '05–14'],
+            ['2', 'Partial (day)', '14–17'],
+            ['3', 'Peak', '17–23'],
+            ['4', 'Partial (night)', '23–05'],
+          ]}
+        />
+        <Eq>{`Pricing map (4 buckets → 3 TOU periods):
+  off-peak ← y₁
+  partial  ← y₂ + y₄
+  peak     ← y₃`}</Eq>
+        <Callout tone="info">Self-consumption, export and import are computed per the four buckets; only the price lookup uses the 3-period mapping.</Callout>
+      </div>
+    ),
+  },
+  {
+    id: 'alloc-flows', group: 'Energy allocation', icon: Split, title: 'Export, import & self-use',
+    keywords: 'export import self consumption residual flows',
+    body: () => (
+      <div className="space-y-4">
+        <Lead>After self-consumption, residual PV is exported and residual demand is imported.</Lead>
+        <Eq>{`Exportᵢ = max(0, zᵢ − kᵢ)
+Importᵢ = max(0, yᵢ − kᵢ)
+
+Monthly totals:
+  Export_m = Σ Exportᵢ
+  Import_m = Σ Importᵢ
+  SelfCons_m = Σ kᵢ`}</Eq>
+      </div>
+    ),
+  },
+
+  // ---- Calculation paths (the selectable mechanisms) ----------------------
+  {
+    id: 'path-net-billing', group: 'Calculation paths', icon: Network, title: 'M2 — Net Billing (on-site)',
+    keywords: 'net billing m2 on-site default path mechanism',
+    body: () => (
+      <div className="space-y-4">
+        <Callout tone="ok" title="When this path runs">Grid connection = “Net billing”. The default for most prosumers. Cap α: residential 100 %, non-residential 50 %.</Callout>
+        <Steps>
+          <Step n={1} title="Size">X₂ = α · C_annual/12; derive inverter; apply residential cap if binding.</Step>
+          <Step n={2} title="Allocate">Split each month into buckets; compute self-use, export, import.</Step>
+          <Step n={3} title="Price import">Raw energy charge T(Import_m) from the resolved sector tariff.</Step>
+          <Step n={4} title="Export revenue">
+            <Eq>{`R_exp = Export_m · t_exp
+t_exp = 0.05 (res) | 0.04 (non-res) JD/kWh`}</Eq>
+          </Step>
+          <Step n={5} title="Raw bill & credit ledger">
+            <Eq>{`B_raw = T(Import_m) − R_exp
+→ run the net-billing credit ledger (see Tariffs → Credit ledger)`}</Eq>
+          </Step>
+          <Step n={6} title="Add-ons, min bill, PF">Layer rural fils, fuel clause, TV fee, meter rent (+optional GAM/waste), enforce the minimum bill, apply any power-factor surcharge.</Step>
+          <Step n={7} title="Grid-service fee">Add F_grid = P_inv · r_sector · 12 to the annual after-PV cost.</Step>
+        </Steps>
+      </div>
+    ),
+  },
+  {
+    id: 'path-wheeling', group: 'Calculation paths', icon: ArrowLeftRight, title: 'M1 — Wheeling (off-site)',
+    keywords: 'wheeling m1 off-site different tou windows',
+    body: () => (
+      <div className="space-y-4">
+        <Callout tone="warn" title="Eligibility">Small/medium industrial, hotels and agriculture only — residential is excluded (LV only). Cap α = 50 %.</Callout>
+        <Lead>Same pipeline as Net Billing, but wheeling uses different TOU windows:</Lead>
+        <PTable
+          head={['Period', 'Standard EMRC', 'Wheeling (M1)']}
+          rows={[
+            ['Off-peak', '05–14 (9h)', '05–17 (12h)'],
+            ['Partial', '14–17 + 23–05 (9h)', '23–05 (6h)'],
+            ['Peak', '17–23 (6h)', '17–23 (6h)'],
+          ]}
+        />
+        <Callout tone="info">The 14:00–17:00 mid-afternoon hours fall in wheeling off-peak, not partial.</Callout>
+      </div>
+    ),
+  },
+  {
+    id: 'path-zero-export', group: 'Calculation paths', icon: Ban, title: 'M3 — Zero Export',
+    keywords: 'zero export m3 battery limiter no revenue',
+    body: () => (
+      <div className="space-y-4">
+        <Callout tone="warn" title="Eligibility">All sectors except banks / “ordinary” / extractive. Export-limiter required; battery allowed. Cap α = 100 %.</Callout>
+        <Lead>Identical to Net Billing except export revenue is forced to zero — accidental export is uncompensated.</Lead>
+        <Eq>{`R_exp = 0
+B_raw = T(Import_m)        (no export offset, no credit accrual)`}</Eq>
+      </div>
+    ),
+  },
+  {
+    id: 'path-bass', group: 'Calculation paths', icon: Repeat, title: 'M4 — Buy-All / Sell-All',
+    keywords: 'buy all sell all m4 bass export everything import everything',
+    body: () => (
+      <div className="space-y-4">
+        <Callout tone="ok" title="When this path runs">Grid connection = “Buy all sell all”. Available to all sectors; the only option for banks / extractive. Computed live in the frontend.</Callout>
+        <Lead>All PV generation is sold to the grid and all consumption is bought from it — no on-site self-consumption.</Lead>
+        <Steps>
+          <Step n={1} title="Generation estimate">
+            <Eq>{`X₂ = C_annual / 12     (cap α = 100 %)
+generation_m = X₂ ; self-consumption = 0`}</Eq>
+          </Step>
+          <Step n={2} title="Import cost">Full consumption priced at the sector tariff (+ universal add-ons, min bill).</Step>
+          <Step n={3} title="Export revenue">
+            <Eq>{`R_exp = X₂ · export_rate
+(residential default 0.05 ; industrial configurable)`}</Eq>
+          </Step>
+          <Step n={4} title="Net monthly cost">
+            <Eq>{`Net_m = applyMinBill(import + add-ons) − R_exp
+Savings_m = Bill_before − Net_m`}</Eq>
+          </Step>
+        </Steps>
+        <Callout tone="info">Industrial BASS uses the 4-period import schedule (Small: tiered 0.06/0.068; Medium: 0.059/0.069/0.079 by period). Grid-service fee is 0 (exempt).</Callout>
+      </div>
+    ),
+  },
+  {
+    id: 'path-legacy-nem', group: 'Calculation paths', icon: Zap, title: 'M5 — Legacy Net Metering',
+    keywords: 'legacy net metering m5 kwh credit grandfathered haircut',
+    body: () => (
+      <div className="space-y-4">
+        <Callout tone="warn" title="Eligibility">Systems with EMRC/DISCO approval before 1 June 2024. Settled in kWh, not JD.</Callout>
+        <Eq>{`creditedExportsKWh = exportsKWh · haircut          (default 0.80)
+netKWh = importsKWh − creditedExportsKWh − priorCarryKWh
+
+if netKWh ≥ 0:
+    invoiceJD = netKWh · (retailTariff + fuelClause/1000)
+    carryKWh  = 0
+else:
+    invoiceJD = 0
+    carryKWh  = −netKWh    (forfeited at year end)`}</Eq>
+        <Callout tone="info">Not subject to the new Bylaw 58 grid-service fee.</Callout>
+      </div>
+    ),
+  },
+
+  // ---- Tariffs & billing --------------------------------------------------
+  {
+    id: 'tariff-residential', group: 'Tariffs & billing', icon: DollarSign, title: 'Residential tariffs (A1/A2)',
+    keywords: 'residential tiered subsidized unsubsidized a1 a2 blocks fils',
+    body: () => (
+      <div className="space-y-4">
+        <div>
+          <div className="font-medium mb-1">A1 — Subsidized (tiered)</div>
+          <PTable head={['Block', 'fils/kWh', 'JD/kWh']} rows={[
+            ['1 – 300 kWh', '50', '0.050'],
+            ['301 – 600 kWh', '100', '0.100'],
+            ['601+ kWh', '200', '0.200'],
+          ]} />
+          <Lead>Cash subsidies (bill credit): −2.500 JD for 51–200 kWh; −2.000 JD for 201–600 kWh.</Lead>
+        </div>
+        <div>
+          <div className="font-medium mb-1">A2 — Unsubsidized (tiered)</div>
+          <PTable head={['Block', 'fils/kWh', 'JD/kWh']} rows={[
+            ['1 – 1000 kWh', '120', '0.120'],
+            ['1001+ kWh', '150', '0.150'],
+          ]} />
+        </div>
+        <Callout tone="info">Minimum bill 1.750 JD/month. A2 applies when the subsidy-loss trigger fires.</Callout>
+      </div>
+    ),
+  },
+  {
+    id: 'tariff-industrial', group: 'Tariffs & billing', icon: Gauge, title: 'Industrial tariffs (TOU)',
+    keywords: 'industrial c1 c2 c3 c4 tou off peak partial peak fils',
+    body: () => (
+      <div className="space-y-4">
+        <div className="font-medium">C2 Medium — 3-period TOU (default)</div>
+        <PTable head={['Period', 'Window', 'fils/kWh']} rows={[
+          ['Off-peak', '05–14 (9h)', '59'],
+          ['Partial', '14–17 + 23–05 (9h)', '69'],
+          ['Peak', '17–23 (6h)', '79'],
+        ]} />
+        <PTable head={['Sector', 'Pricing (fils/kWh)']} rows={[
+          ['C1 Small ≤200 kW', 'tiered 60 (≤10000 kWh) / 68 above — no TOU'],
+          ['C3 Large', 'TOU 130 / 120 / 110'],
+          ['C4 Extractive', 'TOU 226 / 216 / 206'],
+        ]} />
+        <Callout tone="info">Minimum bill 2.000 JD/month for all non-residential sectors. Other sectors (commercial, banks, hotels, hospitals, agriculture, government…) resolve to their own EMRC schedule.</Callout>
+      </div>
+    ),
+  },
+  {
+    id: 'billing-addons', group: 'Tariffs & billing', icon: Receipt, title: 'Add-ons, min bill & PF',
+    keywords: 'rural fils fuel clause tv fee meter rent gam waste minimum bill power factor penalty',
+    body: () => (
+      <div className="space-y-4">
+        <Lead>Layered on every bill after the energy charge:</Lead>
+        <PTable head={['Add-on', 'Amount']} rows={[
+          ['Rural fils', '1 fils/kWh × import kWh'],
+          ['Fuel clause', 'monthly fils/kWh × import kWh (0 fils Jan–May 2026)'],
+          ['TV fee', '1.000 JD/mo (residential, if enabled)'],
+          ['Meter rent', '0.200 (1-ph) / 0.500 (3-ph) JD/mo'],
+          ['GAM municipal', '1.667 JD ≤200 kWh, else +0.005 × (kWh−200) — opt in'],
+          ['Waste fee', 'Class A 3.000 / B 2.000 / C 1.667 JD/mo — opt in'],
+        ]} />
+        <Callout tone="info">Electricity is VAT-exempt (no VAT line). Minimum bill: 1.750 JD residential / 2.000 JD non-residential.</Callout>
+        <div className="font-medium">Power-factor penalty (NEPCO §I.1.d)</div>
+        <Lead>Industrial C2/C3/C4, agriculture F2, hotels D1/D2. Threshold pf = 0.88; default pf 0.90 → no penalty.</Lead>
+        <Eq>{`steps = round((0.88 − pf) / 0.01)
+PF surcharge = billJD · (pct_per_step · steps) / 100
+  0.88 > pf ≥ 0.70 → 0.77 % | 0.70–0.60 → 0.95 %
+  0.60–0.50 → 1.20 % | pf < 0.50 → 1.50 %`}</Eq>
+      </div>
+    ),
+  },
+  {
+    id: 'billing-credit', group: 'Tariffs & billing', icon: Wallet, title: 'Net-billing credit ledger',
+    keywords: 'credit ledger carry over balance surplus deficit annual reset forfeit cash out',
+    body: () => (
+      <div className="space-y-4">
+        <Lead>A running balance S (start 0) accrues monthly surpluses and is drawn down by deficits. The customer is never billed below zero.</Lead>
+        <Eq>{`B_raw = T(Import_m) − R_exp
+
+if B_raw < 0:            # surplus
+    S    ← S + |B_raw|
+    B_m  ← 0
+else:                    # deficit
+    used ← min(S, B_raw)
+    S    ← S − used
+    B_m  ← B_raw − used`}</Eq>
+        <PTable head={['Annual reset policy', 'Behaviour at Dec 31']} rows={[
+          ['forfeit_year_end (default)', 'S → 0; forfeited JD adds to cost'],
+          ['cash_out', 'DISCO refunds S in JD; S → 0'],
+          ['rollover_indefinite', 'S carries into Year 2'],
+        ]} />
+        <Callout tone="warn">Whether Bylaw 58/2024 forfeits or cashes-out year-end credit is an open question; default is legacy forfeiture.</Callout>
+      </div>
+    ),
+  },
+  {
+    id: 'billing-gridfee', group: 'Tariffs & billing', icon: PlugZap, title: 'Grid-service fee',
+    keywords: 'grid service fee kwac per month bylaw 58',
+    body: () => (
+      <div className="space-y-4">
+        <Eq>{`F_grid = P_inv · r_sector · 12      (JD/year)`}</Eq>
+        <PTable head={['Sector / mechanism', 'JD/kWac/month']} rows={[
+          ['Residential, application ≥ 1/6/2024', '1.000'],
+          ['Residential, legacy (< 1/6/2024)', '2.000'],
+          ['Small/medium industrial · agriculture', '0 (exempt)'],
+          ['Hotels (~M1 off-site)', '~2.5'],
+          ['Commercial / banks / large industrial', '~13'],
+          ['M4 Buy-All / Sell-All (any sector)', '0 (exempt)'],
+        ]} />
+      </div>
+    ),
+  },
+
+  // ---- Electrical BoS -----------------------------------------------------
+  {
+    id: 'elec-strings', group: 'Electrical BoS', icon: Network, title: 'String sizing',
+    keywords: 'string voc cold vmp hot mppt window modules per string',
+    body: () => (
+      <div className="space-y-4">
+        <Lead>String voltages at temperature extremes (IEC 62548), bounded by the inverter MPPT window and Vdc-max.</Lead>
+        <Eq>{`Voc_cold = Voc_STC · (1 + k·(T_min − 25))
+Vmp_hot  = Vmp_STC · (1 + k·(T_max,cell − 25))     (k = Voc temp-coeff, negative)
+
+n_max = ⌊ Vdc_max / Voc_cold ⌋
+n_min = ⌈ Vmppt_min / Vmp_hot ⌉
+
+strings = round( targetkWp·1000 / (n · Wp) )`}</Eq>
+        <Callout tone="info">The design uses the longest valid string within MPPT headroom; per-MPPT current (strings/MPPT × I_mp) is checked against the inverter limit. Defaults: T_min −5 °C, T_cell,max 70 °C.</Callout>
+      </div>
+    ),
+  },
+  {
+    id: 'elec-cables', group: 'Electrical BoS', icon: Cable, title: 'Cable sizing',
+    keywords: 'cable ampacity voltage drop copper cross section',
+    body: () => (
+      <div className="space-y-4">
+        <Lead>Design current = 1.25 × operating current. Pick the smallest copper cross-section whose derated ampacity clears it, then upsize until voltage drop is within limit (≤ 2 % DC, ≤ 1 % AC).</Lead>
+        <Eq>{`I_design = 1.25 · I       (DC: I = Isc·parallel strings)
+                          (AC: I = kVA/(√3·V) 3-ph | kVA/V 1-ph)
+
+ΔV_DC = Imp · ρ·(2L)/A
+ΔV_AC = √3·I·ρ·L/A   (3-ph)  |  2·I·ρ·L/A  (1-ph)
+ρ(Cu) = 0.0225 Ω·mm²/m`}</Eq>
+      </div>
+    ),
+  },
+  {
+    id: 'elec-protection', group: 'Electrical BoS', icon: ShieldCheck, title: 'Protection ratings',
+    keywords: 'fuse disconnect breaker iec 62548 r10',
+    body: () => (
+      <div className="space-y-4">
+        <Eq>{`DC string fuse (only at ≥3 parallel strings/MPPT):
+    1.5·Isc ≤ I_n ≤ module max-series-fuse   (snap to standard)
+DC disconnect: ≥ 1.25 · Isc · strings_per_MPPT
+AC breaker:    ≥ 1.25 · I_ac`}</Eq>
+        <Callout tone="warn">First-pass sizing — verify against actual datasheets and DISCO connection rules before procurement. Breakers/fuses snap to the IEC R10 set (6…630 A); cables to the IEC cross-section set (1.5…300 mm²).</Callout>
+      </div>
+    ),
+  },
+
+  // ---- Financials ---------------------------------------------------------
+  {
+    id: 'fin-savings', group: 'Financials', icon: TrendingUp, title: 'Annual savings',
+    keywords: 'savings annual grid fee',
+    body: () => (
+      <div className="space-y-4">
+        <Eq>{`S_annual = Σ (Bill_before,m − Bill_after,m) − F_grid`}</Eq>
+        <Lead>Monthly savings include export revenue and applied net-billing credit; the annual grid-service fee is subtracted once.</Lead>
+      </div>
+    ),
+  },
+  {
+    id: 'fin-npv', group: 'Financials', icon: Calculator, title: 'NPV, payback & LCOE',
+    keywords: 'npv payback lcoe degradation discount rate',
+    body: () => (
+      <div className="space-y-4">
+        <Eq>{`Degradation:  δ_y = (1 − 0.005)^(y−1)        (y = 1…25)
+
+NPV = −C₀ + Σ_{y=1}^{25}  (S_annual · δ_y) / (1 + d)^y      (d = 5 %)
+
+Payback = C₀ / S_annual          (years)
+LCOE    = C₀ / (E_annual · 25)   (E_annual = 12·X₂)`}</Eq>
+        <Callout tone="info">Tariffs are held flat across the 25-year horizon; the discount rate alone discounts future savings. LCOE here is the simple (un-discounted) first-pass benchmark.</Callout>
+      </div>
+    ),
+  },
+
+  // ---- Reference ----------------------------------------------------------
+  {
+    id: 'defaults', group: 'Reference', icon: Settings, title: 'Default parameters',
+    keywords: 'defaults assumptions efficiency degradation discount yield ratio',
+    body: () => (
+      <div className="space-y-4">
+        <PTable head={['Quantity', 'Default']} rows={[
+          ['System efficiency η', '95 %'],
+          ['Specific yield (EMRC)', '150 kWh/kWp·month (1,800/yr)'],
+          ['DC:AC ratio', '1.5 residential / 1.2 other'],
+          ['Residential inverter cap', '3.6 kWac (1-ph) / 10 kWac (3-ph)'],
+          ['Annual degradation', '0.5 %/year'],
+          ['Discount rate (NPV)', '5 %/year'],
+          ['Project lifetime', '25 years'],
+          ['Export tariff', '0.050 res / 0.040 non-res JD/kWh'],
+          ['Min bill', '1.750 res / 2.000 non-res JD/mo'],
+          ['Power-factor threshold', '0.88 (default pf 0.90)'],
+          ['Bylaw 58 grandfathering hinge', '1 June 2024 (approval date)'],
+        ]} />
+      </div>
+    ),
+  },
+  {
+    id: 'sources', group: 'Reference', icon: FileText, title: 'Regulatory sources',
+    keywords: 'references emrc nepco bylaw 58 law 12 sources',
+    body: () => (
+      <div className="space-y-3">
+        <ul className="list-disc pl-5 text-sm space-y-1.5">
+          <li>EMRC Tariff Guide 2025 (effective 1 January 2025; Arabic prevails).</li>
+          <li>NEPCO bilingual schedule.</li>
+          <li>Bylaw No. 58 of 2024 (Official Gazette 19 August 2024) — net-billing economics.</li>
+          <li>Law No. 12 of 2024 — REEEL amendment establishing the 1 June 2024 grandfathering hinge.</li>
+          <li>EMRC Chairman statement (19 August 2024) — residential 3.6 / 10 kWac inverter caps.</li>
+          <li>IEC 62548 (PV array protection) · IEC 60364-5-52 (cable ampacity & voltage drop).</li>
+        </ul>
+        <Callout tone="warn" title="Verify before launch">
+          Several per-sector TOU spreads and the M2 credit reset policy are reconstructions/defaults
+          pending EMRC primary confirmation. Validate against an actual post-2025 bill before
+          commercial use.
+        </Callout>
+      </div>
+    ),
+  },
+];
+
+// ===========================================================================
+// Component
+// ===========================================================================
+export default function HelpSection() {
+  const [activeId, setActiveId] = useState<string>(TOPICS[0].id);
+  const [query, setQuery] = useState('');
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return TOPICS;
+    return TOPICS.filter((t) =>
+      (t.title + ' ' + t.group + ' ' + (t.keywords ?? '')).toLowerCase().includes(q),
+    );
+  }, [query]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, Topic[]>();
+    for (const t of filtered) {
+      if (!map.has(t.group)) map.set(t.group, []);
+      map.get(t.group)!.push(t);
+    }
+    return GROUP_ORDER.filter((g) => map.has(g)).map((g) => [g, map.get(g)!] as const);
+  }, [filtered]);
+
+  const active = TOPICS.find((t) => t.id === activeId) ?? TOPICS[0];
+  const activeIndex = TOPICS.findIndex((t) => t.id === active.id);
+  const prev = TOPICS[activeIndex - 1];
+  const next = TOPICS[activeIndex + 1];
+  const ActiveIcon = active.icon;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3 flex-wrap">
         <BookOpen className="h-6 w-6 text-primary" />
-        <h2 className="text-2xl font-semibold">Help & Documentation</h2>
-        <Badge variant="outline">PyQt6 Formula Reference</Badge>
-      </div>
-      
-      <div className="text-sm text-muted-foreground bg-muted/50 p-4 rounded-lg">
-        <Info className="h-4 w-4 inline mr-2" />
-        This section displays all equations and parameters used in the Solar PV Calculator, 
-        preserved exactly as implemented in the original PyQt6 application.
+        <h2 className="text-2xl font-semibold">Help &amp; Methodology</h2>
+        <Badge variant="outline">EMRC 2025 · Bylaw 58/2024</Badge>
       </div>
 
-      {/* Core Calculation Formula */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Calculator className="h-5 w-5" />
-            Core System Sizing Formula
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="bg-accent/20 p-4 rounded-lg font-mono text-sm">
-            <div className="font-bold text-primary mb-2">X2 Formula (Monthly PV Generation):</div>
-            <div className="space-y-2">
-              <div><strong>Residential:</strong> X2 = (Sum of all monthly consumption) / 12</div>
-              <div><strong>Industrial:</strong> X2 = ((Sum of all monthly consumption) / 12) / 2</div>
+      <div className="grid lg:grid-cols-[300px_1fr] gap-6 items-start">
+        {/* ---- Left rail: searchable topic tree ---- */}
+        <Card className="lg:sticky lg:top-2">
+          <CardContent className="p-3 space-y-3">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search topics…"
+                className="pl-8 h-9"
+                data-testid="input-help-search"
+              />
             </div>
-            <div className="text-muted-foreground mt-2">
-              Where X2 represents the required monthly PV generation in kWh/month
-            </div>
-            <div className="text-xs text-orange-600 mt-2">
-              <strong>Note:</strong> Industrial customers use X2 = AVG/2 formula as requested
-            </div>
-          </div>
-          
-          <div className="bg-accent/20 p-4 rounded-lg font-mono text-sm">
-            <div className="font-bold text-primary mb-2">Inverter Size Calculation:</div>
-            <div>Inverter Size (kW) = X2 / (130 × 0.95)</div>
-            <div className="text-muted-foreground mt-2">
-              Where 130 is the performance ratio factor and 0.95 is the system efficiency
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Tariff Calculation */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <DollarSign className="h-5 w-5" />
-            Tariff Calculation Methods
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="p-4 bg-primary/5 rounded-lg border border-primary/20">
-            <div className="flex items-center gap-2 mb-3">
-              <Info className="h-4 w-4 text-primary" />
-              <span className="font-semibold text-primary">User Selection Required</span>
-            </div>
-            <p className="text-sm text-muted-foreground mb-4">
-              The user must specify their tariff type in the System Configuration section. 
-              This choice determines which calculation method is used:
-            </p>
-            
-            <h4 className="font-semibold mb-3">✓ Tiered Tariff Support (checkbox checked):</h4>
-            <div className="bg-accent/20 p-4 rounded-lg font-mono text-sm space-y-2 mb-4">
-              <div>if energy_kwh ≤ 300: <span className="text-chart-1">Cost = energy_kwh × 0.05 JD/kWh</span></div>
-              <div>elif energy_kwh ≤ 600: <span className="text-chart-2">Cost = (300 × 0.05) + ((energy_kwh - 300) × 0.1) JD</span></div>
-              <div>else: <span className="text-chart-3">Cost = (300 × 0.05) + (300 × 0.1) + ((energy_kwh - 600) × 0.2) JD</span></div>
-            </div>
-          
-            <h4 className="font-semibold mb-3">✗ Flat Rate Tariff (checkbox unchecked):</h4>
-            <div className="bg-accent/20 p-4 rounded-lg font-mono text-sm space-y-2">
-              <div>if energy_kwh ≤ 1000: <span className="text-chart-1">Cost = energy_kwh × 0.12 JD/kWh</span></div>
-              <div>else: <span className="text-chart-2">Cost = (1000 × 0.12) + ((energy_kwh - 1000) × 0.15) JD</span></div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Buy-All Sell-All System */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Zap className="h-5 w-5" />
-            Residential Buy-All Sell-All System
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200">
-            <h3 className="font-semibold text-green-700 dark:text-green-200 mb-3">Buy-All Sell-All Calculation Steps</h3>
-            <div className="space-y-3 text-sm">
-              <div className="bg-white dark:bg-green-900/40 p-3 rounded font-mono">
-                <div className="font-bold text-green-600 mb-2">Step-by-Step Equations:</div>
-                <div className="space-y-1">
-                  <div><strong>1. Generation Approximation:</strong> X2 = Total Annual Consumption ÷ 12</div>
-                  <div><strong>2. Import Cost:</strong> Uses selected tariff (Tiered or Flat Rate)</div>
-                  <div><strong>3. Taxes:</strong> TX = X2 ÷ (130 × Efficiency)</div>
-                  <div><strong>4. Export Revenue:</strong> X2 × Export Rate</div>
-                  <div><strong>5. NET Monthly Cost:</strong> (Import Cost + Taxes) - Export Revenue</div>
-                </div>
-              </div>
-              <div className="bg-white dark:bg-green-900/40 p-3 rounded">
-                <div className="font-semibold text-green-600 mb-2">System Parameters:</div>
-                <ul className="list-disc pl-4 space-y-1">
-                  <li><strong>Generation Method:</strong> All PV generation exported to grid (X2 = monthly estimate)</li>
-                  <li><strong>Consumption Method:</strong> All consumption imported from grid</li>
-                  <li><strong>Self-Consumption:</strong> Zero (no direct PV use)</li>
-                  <li><strong>Export Rate:</strong> User-configurable (default: 0.05 JD/kWh)</li>
-                  <li><strong>Efficiency:</strong> User-configurable system efficiency (default: 95%)</li>
-                  <li><strong>Tariff Options:</strong> Tiered (≤300@0.05, 300-600@0.1, &gt;600@0.2) or Flat (≤1000@0.12, &gt;1000@0.15)</li>
-                </ul>
-              </div>
-              <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 rounded">
-                <div className="font-semibold text-yellow-700 dark:text-yellow-200 mb-1">Key Differences from Net Billing:</div>
-                <div className="text-yellow-600 dark:text-yellow-300 text-sm">
-                  • No time period parameters required<br/>
-                  • Simplified calculation model<br/>
-                  • All energy flows through the grid (no direct consumption)
-                </div>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Time Period Factors */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Clock className="h-5 w-5" />
-            Time Period Distribution Factors
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-accent/20 p-4 rounded-lg">
-              <h4 className="font-semibold text-chart-1 mb-2">Day Time (5:00-17:00)</h4>
-              <div className="font-mono text-sm">
-                <div>Y1 = X1 × day_factors[month]</div>
-                <div className="text-muted-foreground text-xs mt-1">
-                  Default: 30% per month
-                </div>
-              </div>
-            </div>
-            
-            <div className="bg-accent/20 p-4 rounded-lg">
-              <h4 className="font-semibold text-chart-2 mb-2">Evening (17:00-23:00)</h4>
-              <div className="font-mono text-sm">
-                <div>Y2 = X1 × evening_factors[month]</div>
-                <div className="text-muted-foreground text-xs mt-1">
-                  Default: 30% per month
-                </div>
-              </div>
-            </div>
-            
-            <div className="bg-accent/20 p-4 rounded-lg">
-              <h4 className="font-semibold text-chart-3 mb-2">Night Time (23:00-5:00)</h4>
-              <div className="font-mono text-sm">
-                <div>Y3 = X1 × night_factors[month]</div>
-                <div className="text-muted-foreground text-xs mt-1">
-                  Default: 40% per month
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <div className="text-sm text-muted-foreground p-3 bg-muted/50 rounded">
-            <strong>Note:</strong> X1 represents monthly consumption, and these factors must sum to 1.0 (100%) for each month
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Solar Generation Factors */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Sun className="h-5 w-5" />
-            Solar Generation Distribution
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-accent/20 p-4 rounded-lg">
-              <h4 className="font-semibold text-chart-1 mb-2">Peak Generation (Day)</h4>
-              <div className="font-mono text-sm">
-                <div>Z1 = X2 × sun_peak_factors[month]</div>
-                <div className="text-muted-foreground text-xs mt-1">
-                  Default: 100% (full sun)
-                </div>
-              </div>
-            </div>
-            
-            <div className="bg-accent/20 p-4 rounded-lg">
-              <h4 className="font-semibold text-chart-2 mb-2">Medium Generation (Evening)</h4>
-              <div className="font-mono text-sm">
-                <div>Z2 = X2 × sun_medium_factors[month]</div>
-                <div className="text-muted-foreground text-xs mt-1">
-                  Default: 20% (low sun)
-                </div>
-              </div>
-            </div>
-            
-            <div className="bg-accent/20 p-4 rounded-lg">
-              <h4 className="font-semibold text-chart-3 mb-2">Low Generation (Night)</h4>
-              <div className="font-mono text-sm">
-                <div>Z3 = X2 × sun_low_factors[month]</div>
-                <div className="text-muted-foreground text-xs mt-1">
-                  Default: 0% (no sun)
-                </div>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Self-Consumption Calculation */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Home className="h-5 w-5" />
-            Self-Consumption Calculation
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="bg-accent/20 p-4 rounded-lg font-mono text-sm space-y-2">
-            <div className="font-bold text-primary mb-3">Self-Consumption Formula:</div>
-            <div>K1 = min(Z1 × pv_consume_day[month], Y1) <span className="text-muted-foreground"># Day consumption</span></div>
-            <div>K2 = min(Z2 × pv_consume_evening[month], Y2) <span className="text-muted-foreground"># Evening consumption</span></div>
-            <div>K3 = min(Z3 × pv_consume_night[month], Y3) <span className="text-muted-foreground"># Night consumption</span></div>
-            <Separator className="my-2" />
-            <div className="font-bold">Total Self-Consumption = K1 + K2 + K3</div>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-            <div className="text-center p-3 bg-muted/50 rounded">
-              <div className="font-semibold text-chart-1">Day PV Consumption</div>
-              <div className="text-sm text-muted-foreground">Default: 70%</div>
-            </div>
-            <div className="text-center p-3 bg-muted/50 rounded">
-              <div className="font-semibold text-chart-2">Evening PV Consumption</div>
-              <div className="text-sm text-muted-foreground">Default: 90%</div>
-            </div>
-            <div className="text-center p-3 bg-muted/50 rounded">
-              <div className="font-semibold text-chart-3">Night PV Consumption</div>
-              <div className="text-sm text-muted-foreground">Default: 100%</div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Export and Import Calculation */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5" />
-            Export & Import Calculation
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="bg-accent/20 p-4 rounded-lg font-mono text-sm space-y-2">
-            <div className="font-bold text-primary mb-3">Export to Grid:</div>
-            <div>Export = max(0, Z1 - K1) + max(0, Z2 - K2) + max(0, Z3 - K3)</div>
-            
-            <div className="font-bold text-primary mt-4 mb-3">Import from Grid:</div>
-            <div>Import = max(0, Y1 - K1) + max(0, Y2 - K2) + max(0, Y3 - K3)</div>
-            
-            <div className="font-bold text-primary mt-4 mb-3">Export Revenue:</div>
-            <div>Revenue = Export × export_tariff_rate</div>
-          </div>
-        </CardContent>
-      </Card>
-
-
-      {/* Billing Breakdown & Net Billing System */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FileText className="h-5 w-5" />
-            Billing Breakdown & Net Billing System
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="bg-accent/20 p-4 rounded-lg font-mono text-sm space-y-3">
-            <div className="font-bold text-primary mb-3">Before Solar PV:</div>
-            <div>Bill_Before = calculateTariff(Total_Consumption, tariff_supported)</div>
-            <div className="text-xs text-muted-foreground">Total monthly consumption charged at applicable tariff rates</div>
-            
-            <Separator className="my-3" />
-            
-            <div className="font-bold text-primary mb-3">After Solar PV - Monthly Billing Components:</div>
-            <div className="space-y-2">
-              <div><strong className="text-blue-600">Import_Bill</strong> = calculateTariff(Grid_Import, tariff_supported)</div>
-              <div><strong className="text-green-600">Export_Revenue</strong> = Grid_Export × export_tariff_rate</div>
-              <div><strong className="text-orange-600">Net_Bill</strong> = Import_Bill - Export_Revenue</div>
-            </div>
-            <div className="text-xs text-muted-foreground mt-2">
-              Net Bill shows the final amount after offsetting import costs with export earnings
-            </div>
-            
-            <Separator className="my-3" />
-            
-            <div className="font-bold text-primary mb-3">Monthly Savings Calculation:</div>
-            <div>Monthly_Savings = Bill_Before - Net_Bill</div>
-          </div>
-
-          {/* Net Billing Credit System */}
-          <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-200">
-            <div className="font-bold text-blue-700 dark:text-blue-200 mb-3">Net Billing Credit Carry-Over System:</div>
-            <div className="font-mono text-sm space-y-2">
-              <div className="space-y-1">
-                <div><strong>Credit Generation:</strong> When Net_Bill &lt; 0 (export revenue exceeds import cost)</div>
-                <div className="pl-4">Credits_Generated = |Net_Bill| (absolute value of negative bill)</div>
-                
-                <div className="mt-2"><strong>Credit Usage:</strong> When Net_Bill &gt; 0 (import cost exceeds export revenue)</div>
-                <div className="pl-4">Credits_Used = min(Available_Credits, Net_Bill)</div>
-                <div className="pl-4">Final_Bill = Net_Bill - Credits_Used</div>
-                
-                <div className="mt-2"><strong>Running Balance:</strong></div>
-                <div className="pl-4">Credit_Balance = Previous_Balance + Credits_Generated - Credits_Used</div>
-                
-                <div className="text-xs text-blue-600 mt-3">
-                  <strong>Month-to-Month Carry-Over:</strong> Unused credits automatically carry forward to subsequent months
-                </div>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* NPV and Financial Analysis */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5" />
-            NPV & Financial Analysis
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="bg-accent/20 p-4 rounded-lg font-mono text-sm space-y-2">
-            <div className="font-bold text-primary mb-3">Net Present Value (NPV):</div>
-            <div>NPV = -Initial_Investment + Σ(Annual_Savings_Year_t / (1 + discount_rate)^t)</div>
-            
-            <div className="font-bold text-primary mt-4 mb-3">With Degradation:</div>
-            <div>Degradation_Factor = (1 - 0.005)^year <span className="text-muted-foreground"># 0.5% annual degradation</span></div>
-            <div>Yearly_Savings = Annual_Savings × Degradation_Factor</div>
-            
-            <div className="font-bold text-primary mt-4 mb-3">Simple Payback Period:</div>
-            <div>Payback = System_Cost / Annual_Savings (years)</div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Default Parameters */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Info className="h-5 w-5" />
-            Default System Parameters
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-3">
-              <h4 className="font-semibold">System Configuration:</h4>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span>System Efficiency:</span>
-                  <Badge variant="outline">95%</Badge>
-                </div>
-                <div className="flex justify-between">
-                  <span>Annual Degradation:</span>
-                  <Badge variant="outline">0.5%</Badge>
-                </div>
-                <div className="flex justify-between">
-                  <span>Export Tariff (Residential):</span>
-                  <Badge variant="outline">0.05 JD/kWh</Badge>
-                </div>
-                <div className="flex justify-between">
-                  <span>Export Tariff (Industrial):</span>
-                  <Badge variant="outline">0.04 JD/kWh</Badge>
-                </div>
-                <div className="flex justify-between">
-                  <span>Default Consumption:</span>
-                  <Badge variant="outline">500 kWh/month</Badge>
-                </div>
-              </div>
-            </div>
-            
-            <div className="space-y-3">
-              <h4 className="font-semibold">Financial Analysis:</h4>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span>Discount Rate:</span>
-                  <Badge variant="outline">5%</Badge>
-                </div>
-                <div className="flex justify-between">
-                  <span>Project Life:</span>
-                  <Badge variant="outline">25 years</Badge>
-                </div>
-                <div className="flex justify-between">
-                  <span>Performance Ratio:</span>
-                  <Badge variant="outline">130 factor</Badge>
-                </div>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Residential Customer Calculation Methodology */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Home className="h-5 w-5" />
-            Residential Customer Calculation Methodology
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-            <h4 className="font-semibold text-blue-700 dark:text-blue-200 mb-2">Residential 3-Period Time Structure</h4>
-            <p className="text-sm text-blue-600 dark:text-blue-300">
-              Residential customers use a 3-period time-of-use system with Day, Evening, and Night periods.
-            </p>
-          </div>
-
-          {/* Reference to main tariff section */}
-          <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-            <div className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-2">📋 Tariff Calculation Methods</div>
-            <p className="text-sm text-blue-600 dark:text-blue-300">
-              Residential customers use the same tariff calculation methods as described in the "Tariff Calculation Methods" section above.
-              Both tiered and flat rate options are available based on user configuration.
-            </p>
-          </div>
-
-          {/* Time Periods for Residential */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-3">
-              <h4 className="font-semibold text-muted-foreground">Time Period Definitions</h4>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between p-2 bg-muted/50 rounded">
-                  <span className="font-medium">Day (7-14):</span>
-                  <span className="text-muted-foreground">7 hours</span>
-                </div>
-                <div className="flex justify-between p-2 bg-muted/50 rounded">
-                  <span className="font-medium">Evening (14-23):</span>
-                  <span className="text-muted-foreground">9 hours</span>
-                </div>
-                <div className="flex justify-between p-2 bg-muted/50 rounded">
-                  <span className="font-medium">Night (23-7):</span>
-                  <span className="text-muted-foreground">8 hours</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <h4 className="font-semibold text-muted-foreground">Default Export Rates</h4>
-              <div className="space-y-2 text-sm">
-                <div className="p-2 bg-muted/50 rounded text-center">
-                  <div className="text-green-600 font-medium">All Periods</div>
-                  <div className="text-lg font-bold text-green-700">5.0 ¢/kWh</div>
-                  <div className="text-xs text-muted-foreground">Residential</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Residential PV Generation Factors */}
-          <div className="space-y-3">
-            <h4 className="font-semibold text-muted-foreground">Residential PV Generation Factors (K-Factors)</h4>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-              <div className="p-3 bg-muted/50 rounded text-center">
-                <div className="font-medium text-chart-1">Day Factor</div>
-                <div className="text-xs text-muted-foreground">Day (7-14)</div>
-                <div className="text-lg font-bold text-chart-1">75%</div>
-              </div>
-              <div className="p-3 bg-muted/50 rounded text-center">
-                <div className="font-medium text-chart-2">Evening Factor</div>
-                <div className="text-xs text-muted-foreground">Evening (14-23)</div>
-                <div className="text-lg font-bold text-chart-2">85%</div>
-              </div>
-              <div className="p-3 bg-muted/50 rounded text-center">
-                <div className="font-medium text-chart-3">Night Factor</div>
-                <div className="text-xs text-muted-foreground">Night (23-7)</div>
-                <div className="text-lg font-bold text-chart-3">60%</div>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Industrial Customer Calculation Methodology */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Building2 className="h-5 w-5" />
-            Industrial Customer Calculation Methodology
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="p-4 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg">
-            <h4 className="font-semibold text-orange-700 dark:text-orange-200 mb-2">Industrial 4-Period Time Structure</h4>
-            <p className="text-sm text-orange-600 dark:text-orange-300">
-              Industrial customers use a sophisticated 4-period time-of-use system with distinct rates for each period.
-            </p>
-          </div>
-
-          {/* Time Periods */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-3">
-              <h4 className="font-semibold text-muted-foreground">Time Period Definitions</h4>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between p-2 bg-muted/50 rounded">
-                  <span className="font-medium">Off Peak (5-14):</span>
-                  <span className="text-muted-foreground">9 hours</span>
-                </div>
-                <div className="flex justify-between p-2 bg-muted/50 rounded">
-                  <span className="font-medium">Half Peak (14-17):</span>
-                  <span className="text-muted-foreground">3 hours</span>
-                </div>
-                <div className="flex justify-between p-2 bg-muted/50 rounded">
-                  <span className="font-medium">Peak (17-23):</span>
-                  <span className="text-muted-foreground">6 hours</span>
-                </div>
-                <div className="flex justify-between p-2 bg-muted/50 rounded">
-                  <span className="font-medium">Half Peak (23-5):</span>
-                  <span className="text-muted-foreground">6 hours</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <h4 className="font-semibold text-muted-foreground">Default Tariff Rates</h4>
-              <div className="space-y-2 text-sm">
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="text-orange-600 font-medium">Import (¢/kWh)</div>
-                  <div className="text-green-600 font-medium">Export (¢/kWh)</div>
-                </div>
-                <div className="grid grid-cols-2 gap-2 p-2 bg-muted/50 rounded text-xs">
-                  <span>Off Peak: 5.9</span>
-                  <span>Off Peak: 4.0</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 p-2 bg-muted/50 rounded text-xs">
-                  <span>Half Peak: 6.9</span>
-                  <span>Half Peak: 4.0</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 p-2 bg-muted/50 rounded text-xs">
-                  <span>Peak: 7.9</span>
-                  <span>Peak: 4.0</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 p-2 bg-muted/50 rounded text-xs">
-                  <span>Half Peak Night: 6.9</span>
-                  <span>Half Peak Night: 4.0</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Industrial Net Billing Tariff Calculation */}
-          <div className="space-y-4">
-            <h4 className="font-semibold text-orange-700 dark:text-orange-200">Industrial Net Billing Calculation Methods</h4>
-            
-            <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-lg border border-orange-200 dark:border-orange-800">
-              <div className="text-sm font-medium text-orange-800 dark:text-orange-200 mb-3">🏭 Industrial 4-Period Tariff Structure</div>
-              
-              <div className="space-y-3 font-mono text-xs">
-                <div className="space-y-1">
-                  <div className="text-orange-700 dark:text-orange-300 font-semibold">For each time period (P1, P2, P3, P4):</div>
-                  <div className="pl-4 space-y-1">
-                    <div><span className="text-orange-600">if</span> consumption_period &gt; 0: <span className="text-blue-600">cost</span> = consumption_period × import_rate_¢/kWh</div>
-                    <div><span className="text-orange-600">if</span> export_period &gt; 0: <span className="text-green-600">revenue</span> = export_period × <span className="text-green-700">4.0</span> ¢/kWh</div>
+            <nav className="lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto pr-1 space-y-3">
+              {grouped.length === 0 && (
+                <p className="text-sm text-muted-foreground px-1 py-4">No topics match “{query}”.</p>
+              )}
+              {grouped.map(([group, topics]) => (
+                <div key={group}>
+                  <div className="px-2 mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {group}
+                  </div>
+                  <div className="space-y-0.5">
+                    {topics.map((t) => {
+                      const Icon = t.icon;
+                      const isActive = t.id === active.id;
+                      return (
+                        <button
+                          key={t.id}
+                          onClick={() => setActiveId(t.id)}
+                          data-testid={`help-topic-${t.id}`}
+                          className={`w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-left transition-colors ${
+                            isActive
+                              ? 'bg-primary/15 text-primary font-medium'
+                              : 'hover:bg-muted text-foreground/80'
+                          }`}
+                        >
+                          <Icon className={`h-4 w-4 flex-none ${isActive ? 'text-primary' : 'text-muted-foreground'}`} />
+                          <span className="truncate">{t.title}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-                
-                <div className="space-y-1">
-                  <div className="text-orange-700 dark:text-orange-300 font-semibold">Monthly calculation:</div>
-                  <div className="pl-4 space-y-1">
-                    <div><span className="text-blue-600">total_cost</span> = (P1_cost + P2_cost + P3_cost + P4_cost)</div>
-                    <div><span className="text-green-600">total_revenue</span> = (P1_export + P2_export + P3_export + P4_export) × <span className="text-green-700">4.0</span> ¢/kWh</div>
-                    <div><span className="text-purple-600">net_bill</span> = <span className="text-blue-600">total_cost</span> - <span className="text-green-600">total_revenue</span></div>
-                  </div>
-                </div>
+              ))}
+            </nav>
+          </CardContent>
+        </Card>
 
-                <div className="space-y-1">
-                  <div className="text-orange-700 dark:text-orange-300 font-semibold">Net billing credit system:</div>
-                  <div className="pl-4 space-y-1">
-                    <div><span className="text-orange-600">if</span> <span className="text-purple-600">net_bill</span> &lt; 0: credit_generated = |net_bill|</div>
-                    <div><span className="text-orange-600">if</span> <span className="text-purple-600">net_bill</span> &gt; 0 <span className="text-orange-600">and</span> credits_available &gt; 0:</div>
-                    <div className="pl-8">final_bill = max(0, net_bill - credits_available)</div>
-                  </div>
-                </div>
+        {/* ---- Right pane: selected topic ---- */}
+        <Card>
+          <CardContent className="p-6 space-y-5">
+            <div className="space-y-1">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {active.group}
               </div>
+              <h3 className="text-xl font-semibold flex items-center gap-2">
+                <ActiveIcon className="h-5 w-5 text-primary" />
+                {active.title}
+              </h3>
             </div>
+            <Separator />
+            <div className="space-y-4">{active.body()}</div>
 
-            <div className="text-xs text-muted-foreground bg-muted/30 p-3 rounded">
-              <strong>Industrial Rates Example:</strong> Off Peak: 5.9¢/kWh import | Half Peak: 6.9¢/kWh import | Peak: 7.9¢/kWh import | All exports: 4.0¢/kWh
+            <Separator />
+            <div className="flex items-center justify-between gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!prev}
+                onClick={() => prev && setActiveId(prev.id)}
+                className="gap-1"
+              >
+                <ChevronLeft className="h-4 w-4" />
+                <span className="truncate max-w-[40vw]">{prev ? prev.title : ''}</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!next}
+                onClick={() => next && setActiveId(next.id)}
+                className="gap-1"
+              >
+                <span className="truncate max-w-[40vw]">{next ? next.title : ''}</span>
+                <ChevronRight className="h-4 w-4" />
+              </Button>
             </div>
-          </div>
-
-          {/* Industrial Calculation Formula */}
-          <div className="bg-accent/20 p-4 rounded-lg font-mono text-sm">
-            <div className="font-bold text-primary mb-2">Industrial Cost Calculation:</div>
-            <div className="space-y-1 text-xs">
-              <div>Monthly Cost = (Consumption_P1 × Rate_P1) + (Consumption_P2 × Rate_P2) + (Consumption_P3 × Rate_P3) + (Consumption_P4 × Rate_P4)</div>
-              <div>Monthly Revenue = (Export_P1 × Export_Rate_P1) + (Export_P2 × Export_Rate_P2) + (Export_P3 × Export_Rate_P3) + (Export_P4 × Export_Rate_P4)</div>
-              <div className="text-muted-foreground mt-2">
-                Where P1=Off Peak, P2=Half Peak, P3=Peak, P4=Half Peak Night
-              </div>
-            </div>
-          </div>
-
-          {/* PV Generation Factors */}
-          <div className="space-y-3">
-            <h4 className="font-semibold text-muted-foreground">Industrial PV Generation Factors (K-Factors)</h4>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-              <div className="p-3 bg-muted/50 rounded text-center">
-                <div className="font-medium text-chart-3">K1 Factor</div>
-                <div className="text-xs text-muted-foreground">Off Peak (5-14)</div>
-                <div className="text-lg font-bold text-chart-3">80%</div>
-              </div>
-              <div className="p-3 bg-muted/50 rounded text-center">
-                <div className="font-medium text-chart-4">K2 Factor</div>
-                <div className="text-xs text-muted-foreground">Half Peak (14-17)</div>
-                <div className="text-lg font-bold text-chart-4">85%</div>
-              </div>
-              <div className="p-3 bg-muted/50 rounded text-center">
-                <div className="font-medium text-chart-5">K3 Factor</div>
-                <div className="text-xs text-muted-foreground">Peak (17-23)</div>
-                <div className="text-lg font-bold text-chart-5">90%</div>
-              </div>
-              <div className="p-3 bg-muted/50 rounded text-center">
-                <div className="font-medium text-chart-6">K4 Factor</div>
-                <div className="text-xs text-muted-foreground">Half Peak (23-5)</div>
-                <div className="text-lg font-bold text-chart-6">70%</div>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Formula Verification */}
-      <Card className="border-primary/20">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-primary">
-            <Calculator className="h-5 w-5" />
-            Formula Verification & Quality Assurance
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="bg-primary/5 p-4 rounded-lg">
-            <p className="text-sm">
-              <strong>All formulas and calculations in this web application are preserved EXACTLY 
-              as implemented in the original PyQt6 Solar PV Calculator.</strong>
-            </p>
-            <Separator className="my-3" />
-            <div className="text-xs text-muted-foreground space-y-1">
-              <div>• No modifications have been made to the core calculation logic</div>
-              <div>• All default parameters match the original PyQt6 values</div>
-              <div>• Time factors, solar factors, and consumption factors are identical</div>
-              <div>• Tariff calculation methods are preserved exactly</div>
-              <div>• NPV and financial analysis formulas are unchanged</div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

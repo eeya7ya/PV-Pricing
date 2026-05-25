@@ -1,7 +1,9 @@
-import type { Express } from "express";
-import { setupAuth } from "./fakeAuth";
+import type { Express, Request } from "express";
+import { setupAuth, isAuthenticated } from "./fakeAuth";
 import { z } from "zod";
 import { storage } from "./storage";
+import { dbConfigured } from "./db";
+import { listCases, getCase, createCase, updateCase, deleteCase } from "./savedCases";
 import { insertSolarProjectSchema, type CalculationResults, type MonthlyConsumption, type TimeFactors, IndustrialTariffsSchema, TimeFactorsSchema, MonthlyConsumptionSchema } from "../shared/schema";
 import {
   type SectorCode,
@@ -39,6 +41,108 @@ import {
 export async function registerRoutes(app: Express): Promise<void> {
   // Setup fake (demo) authentication routes — replaces Replit/Google OAuth.
   setupAuth(app);
+
+  // ===========================================================================
+  // Saved study cases (per Google account, persisted in Neon Postgres).
+  // Scoped by the authenticated user's email so each user only sees their own.
+  // Guests (no email) cannot save — they get a clear 403 message.
+  // ===========================================================================
+  const saveCaseSchema = z.object({
+    name: z.string().trim().min(1, "A name is required").max(120),
+    state: z.unknown(),
+    results: z.unknown().optional(),
+  });
+
+  // Resolve the owner email set by `isAuthenticated`. Returns null for guests.
+  const ownerEmail = (req: Request): string | null => {
+    const email = (req as any).user?.email;
+    return typeof email === "string" && email.length > 0 ? email : null;
+  };
+
+  app.get("/api/cases", isAuthenticated, async (req, res) => {
+    if (!dbConfigured()) {
+      return res.status(503).json({ message: "Saving is not configured yet (DATABASE_URL is missing)." });
+    }
+    const email = ownerEmail(req);
+    if (!email) return res.json([]); // guests have nothing saved
+    try {
+      res.json(await listCases(email));
+    } catch (error) {
+      console.error("listCases failed:", error);
+      res.status(500).json({ message: "Failed to load saved cases" });
+    }
+  });
+
+  app.get("/api/cases/:id", isAuthenticated, async (req, res) => {
+    if (!dbConfigured()) {
+      return res.status(503).json({ message: "Saving is not configured yet (DATABASE_URL is missing)." });
+    }
+    const email = ownerEmail(req);
+    if (!email) return res.status(403).json({ message: "Sign in with Google to load saved cases." });
+    try {
+      const found = await getCase(req.params.id, email);
+      if (!found) return res.status(404).json({ message: "Case not found" });
+      res.json(found);
+    } catch (error) {
+      console.error("getCase failed:", error);
+      res.status(500).json({ message: "Failed to load case" });
+    }
+  });
+
+  app.post("/api/cases", isAuthenticated, async (req, res) => {
+    if (!dbConfigured()) {
+      return res.status(503).json({ message: "Saving is not configured yet (DATABASE_URL is missing)." });
+    }
+    const email = ownerEmail(req);
+    if (!email) return res.status(403).json({ message: "Sign in with Google to save study cases." });
+    const parsed = saveCaseSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.errors[0]?.message ?? "Invalid case data" });
+    }
+    try {
+      const created = await createCase(email, parsed.data.name, parsed.data.state, parsed.data.results ?? null);
+      res.status(201).json(created);
+    } catch (error) {
+      console.error("createCase failed:", error);
+      res.status(500).json({ message: "Failed to save case" });
+    }
+  });
+
+  app.put("/api/cases/:id", isAuthenticated, async (req, res) => {
+    if (!dbConfigured()) {
+      return res.status(503).json({ message: "Saving is not configured yet (DATABASE_URL is missing)." });
+    }
+    const email = ownerEmail(req);
+    if (!email) return res.status(403).json({ message: "Sign in with Google to update saved cases." });
+    const parsed = saveCaseSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.errors[0]?.message ?? "Invalid case data" });
+    }
+    try {
+      const updated = await updateCase(req.params.id, email, parsed.data.name, parsed.data.state, parsed.data.results ?? null);
+      if (!updated) return res.status(404).json({ message: "Case not found" });
+      res.json(updated);
+    } catch (error) {
+      console.error("updateCase failed:", error);
+      res.status(500).json({ message: "Failed to update case" });
+    }
+  });
+
+  app.delete("/api/cases/:id", isAuthenticated, async (req, res) => {
+    if (!dbConfigured()) {
+      return res.status(503).json({ message: "Saving is not configured yet (DATABASE_URL is missing)." });
+    }
+    const email = ownerEmail(req);
+    if (!email) return res.status(403).json({ message: "Sign in with Google to delete saved cases." });
+    try {
+      const deleted = await deleteCase(req.params.id, email);
+      if (!deleted) return res.status(404).json({ message: "Case not found" });
+      res.status(204).send();
+    } catch (error) {
+      console.error("deleteCase failed:", error);
+      res.status(500).json({ message: "Failed to delete case" });
+    }
+  });
 
   // Solar PV Calculator API Routes
   
