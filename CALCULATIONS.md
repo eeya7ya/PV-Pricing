@@ -110,6 +110,25 @@ $$
 The old project convention of ½ for "Industrial" customers is replaced by
 this matrix — M2 non-residential naturally lands at 50 %.
 
+**Detailed monthly distribution (optional).** By default every month receives
+the same target generation `X2` (flat `annual ÷ 12`). When the user enables
+the **Detailed monthly distribution** toggle, the same annual total is instead
+spread across months by the region's seasonal solar share vector
+`s_m` (∑ s_m = 1, default Amman zone), so `gen_m = (12·X2)·s_m`. The annual
+total and the monthly *average* are unchanged; only the month-to-month shape
+becomes seasonal (high summer, low winter). The toggle also exposes the full
+per-month editable factor grids so the time-of-use consumption split can
+differ month to month. When the **PV Design** physics engine is active
+(`Apply to billing`), its region × tilt × loss-chain monthly vector takes
+precedence over both the flat and the seasonal-share paths.
+
+All six customer types now dispatch to their real EMRC sector (an explicit
+sub-sector can be picked in the UI — e.g. C1/C2/C3/C4 industrial, B1/B3/B4
+commercial, D1/D2/D3 hotels, E1/E2 hospitals, F1/F2/F3 agriculture). TOU
+sectors reached through the 3-bucket residential-style path are priced by
+mapping day (05–17) → 9 h off-peak + 3 h partial, evening (17–23) → peak,
+night (23–05) → partial.
+
 ### 2.2 Inverter sizing
 
 The inverter nameplate rating (kWac) is derived from the target monthly
@@ -627,3 +646,60 @@ benchmark.
   and the **~13 JD/kWac commercial grid-fee** numbers are user-editable
   defaults — not confirmed in any retrieved primary source. Validate
   against an actual bill or direct EMRC enquiry before launch.
+
+---
+
+## 8. PV Self-Design Electrical BoS (Analysis tab)
+
+The Analysis tab turns a module + inverter selection into a buildable
+balance-of-system. The pure engine is `shared/pvElectrical.ts`; reference
+basis is IEC 62548 (PV array protection) and IEC 60364-5-52 (cable ampacity
+and voltage drop). Inputs: per-module `W_dc` at STC (+ Voc/Vmp/Isc/Imp and
+Voc temperature coefficient), inverter (kWac, phases, MPPT window, Vdc-max,
+max DC current per MPPT, MPPT count), target array kWp, cable run lengths,
+and the cold/hot cell temperatures (default −5 °C / 70 °C).
+
+### 8.1 String sizing
+
+$$
+V_{oc,\text{cold}} = V_{oc}^{STC}\,(1 + k\,(T_{min}-25)), \qquad
+V_{mp,\text{hot}} = V_{mp}^{STC}\,(1 + k\,(T_{max,cell}-25))
+$$
+
+with `k` the Voc temperature coefficient (%/°C ÷ 100, negative).
+
+$$
+n_{max} = \left\lfloor \frac{V_{dc,max}}{V_{oc,\text{cold}}} \right\rfloor, \qquad
+n_{min} = \left\lceil \frac{V_{mppt,min}}{V_{mp,\text{hot}}} \right\rceil
+$$
+
+The design uses the longest valid string (≤ MPPT-max headroom), then
+`strings = round(targetkWp·1000 / (n·W_p))`. Per-MPPT current
+`strings_per_MPPT × I_mp` is checked against the inverter limit.
+
+### 8.2 Cable sizing (ampacity + voltage drop)
+
+Design current = `1.25 × I` (DC: `I = I_sc × parallel strings`; AC:
+`I = kVA / (√3·V)` 3-ph or `kVA / V` 1-ph). The smallest copper cross-section
+whose derated ampacity clears the design current is chosen, then **upsized**
+until the voltage drop is within limit (default ≤ 2 % DC, ≤ 1 % AC):
+
+$$
+\Delta V_{DC} = I_{mp}\cdot\frac{\rho\,(2L)}{A}, \qquad
+\Delta V_{AC} = \begin{cases}\sqrt3\,I\,\rho L/A & \text{3-phase}\\ 2\,I\,\rho L/A & \text{1-phase}\end{cases}
+$$
+
+with copper `ρ = 0.0225 Ω·mm²/m` at operating temperature.
+
+### 8.3 Protection
+
+- **DC string fuse** (required only at ≥3 parallel strings/MPPT, IEC 62548):
+  `1.5·I_sc ≤ I_n ≤` module max-series-fuse, snapped to a standard rating.
+- **DC disconnect:** standard rating ≥ `1.25 · I_sc · strings_per_MPPT`.
+- **AC breaker:** standard rating ≥ `1.25 · I_ac`.
+
+Standard ratings: breakers/fuses from the IEC R10 set (6…630 A); cables from
+the IEC cross-section set (1.5…300 mm²). The tab also renders a single-line
+diagram (PV array → DC isolator/fuse → inverter → AC breaker → meter → grid)
+and a bill of quantities. All outputs are first-pass and must be verified
+against actual datasheets and DISCO connection rules before procurement.

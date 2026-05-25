@@ -3,6 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { Clock, Sun, Settings, Zap, Building2, Factory } from 'lucide-react';
 import { useState } from 'react';
 import TimeFactorWidget from './TimeFactorWidget';
@@ -11,6 +12,8 @@ import type { TimeFactors, IndustrialBassConfig } from '@shared/schema';
 interface TimeParametersSectionProps {
   customerType: string;
   gridConnection: string;
+  detailedMonthly?: boolean;
+  onDetailedMonthlyChange?: (value: boolean) => void;
   // Consumption Period Factors
   dayFactors: TimeFactors;
   eveningFactors: TimeFactors;
@@ -48,6 +51,8 @@ interface TimeParametersSectionProps {
 export default function TimeParametersSection({
   customerType,
   gridConnection,
+  detailedMonthly = false,
+  onDetailedMonthlyChange,
   dayFactors,
   eveningFactors,
   nightFactors,
@@ -77,11 +82,15 @@ export default function TimeParametersSection({
   // State for dropdown selection
   const [selectedParameter, setSelectedParameter] = useState<'consumption' | 'solar' | 'pv-consumption'>('consumption');
   
-  // Show configuration-specific parameters
-  const showResidentialParams = customerType === 'Residential' && gridConnection === 'Net billing';
+  // Show configuration-specific parameters. The 3-bucket "residential-style"
+  // grid is used for Residential AND the other non-industrial sectors
+  // (Commercial / Hotels / Hospitals / Agriculture), which the backend prices
+  // by mapping the buckets onto EMRC TOU windows.
   const showIndustrialParams = customerType === 'Industrial' && gridConnection === 'Net billing';
   const isResidentialBuyAllSellAll = customerType === 'Residential' && gridConnection === 'Buy all sell all';
   const isIndustrialBuyAllSellAll = customerType === 'Industrial' && gridConnection === 'Buy all sell all';
+  const showResidentialParams =
+    customerType !== 'Industrial' && gridConnection === 'Net billing' && !isResidentialBuyAllSellAll;
   const showUnsupportedConfig = !showResidentialParams && !showIndustrialParams && !isResidentialBuyAllSellAll && !isIndustrialBuyAllSellAll;
 
   // Handle Residential Buy-All Sell-All case (no time period parameters needed)
@@ -328,6 +337,23 @@ export default function TimeParametersSection({
             {customerType} + {gridConnection}
           </Badge>
         </CardTitle>
+        <div className="flex items-center justify-between gap-3 mt-3 p-3 rounded-lg bg-muted/50">
+          <div>
+            <Label htmlFor="detailed-monthly" className="text-sm font-medium">
+              Detailed monthly distribution
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              Off: one distribution applied to every month + flat generation. On: edit each
+              month individually and spread PV generation across the seasonal solar curve.
+            </p>
+          </div>
+          <Switch
+            id="detailed-monthly"
+            checked={detailedMonthly}
+            onCheckedChange={(v) => onDetailedMonthlyChange?.(!!v)}
+            data-testid="switch-detailed-monthly"
+          />
+        </div>
       </CardHeader>
       <CardContent>
         <div className="space-y-6">
@@ -373,6 +399,7 @@ export default function TimeParametersSection({
             {showResidentialParams && (
               <div className="grid gap-4">
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Day Time (5-17) Factors"
                   description="Consumption distribution during day hours"
                   defaultValue={30}
@@ -382,6 +409,7 @@ export default function TimeParametersSection({
                 />
                 
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Evening Time (17-23) Factors"
                   description="Consumption distribution during evening hours"
                   defaultValue={30}
@@ -391,6 +419,7 @@ export default function TimeParametersSection({
                 />
                 
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Night Time (23-5) Factors"
                   description="Consumption distribution during night hours"
                   defaultValue={40}
@@ -408,6 +437,7 @@ export default function TimeParametersSection({
                 </div>
                 
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Off Peak (5-14) Factors"
                   description="Industrial consumption y1 factor during off-peak hours"
                   defaultValue={40}
@@ -417,6 +447,7 @@ export default function TimeParametersSection({
                 />
                 
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Half Peak (14-17) Factors"
                   description="Industrial consumption y2 factor during half-peak hours"
                   defaultValue={20}
@@ -426,6 +457,7 @@ export default function TimeParametersSection({
                 />
                 
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Peak (17-23) Factors"
                   description="Industrial consumption y3 factor during peak hours"
                   defaultValue={30}
@@ -435,6 +467,7 @@ export default function TimeParametersSection({
                 />
                 
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Half Peak (23-5) Factors"
                   description="Industrial consumption y4 factor during late night hours"
                   defaultValue={10}
@@ -461,6 +494,7 @@ export default function TimeParametersSection({
                 </div>
                 
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Day Time Sun Factor"
                   description="Solar generation potential during day hours"
                   defaultValue={100}
@@ -470,6 +504,7 @@ export default function TimeParametersSection({
                 />
                 
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Evening Time Sun Factor"
                   description="Solar generation potential during evening hours"
                   defaultValue={20}
@@ -479,6 +514,7 @@ export default function TimeParametersSection({
                 />
                 
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Night Time Sun Factor"
                   description="Solar generation potential during night hours"
                   defaultValue={0}
@@ -496,6 +532,7 @@ export default function TimeParametersSection({
                 </div>
                 
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Off Peak Solar (5-14)"
                   description="Solar generation during off-peak hours"
                   defaultValue={70}
@@ -505,6 +542,7 @@ export default function TimeParametersSection({
                 />
                 
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Half Peak Solar (14-17)"
                   description="Solar generation during half-peak afternoon"
                   defaultValue={25}
@@ -514,6 +552,7 @@ export default function TimeParametersSection({
                 />
                 
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Peak Solar (17-23)"
                   description="Solar generation during peak evening hours"
                   defaultValue={5}
@@ -523,6 +562,7 @@ export default function TimeParametersSection({
                 />
                 
                 <TimeFactorWidget
+                  detailed={detailedMonthly}
                   title="Half Peak Solar (23-5)"
                   description="Solar generation during night half-peak hours"
                   defaultValue={0}
@@ -549,6 +589,7 @@ export default function TimeParametersSection({
                   </div>
                   
                   <TimeFactorWidget
+                  detailed={detailedMonthly}
                     title="Day Time PV Consumption"
                     description="Percentage of PV generation consumed on-site during day"
                     defaultValue={70}
@@ -558,6 +599,7 @@ export default function TimeParametersSection({
                   />
                   
                   <TimeFactorWidget
+                  detailed={detailedMonthly}
                     title="Evening Time PV Consumption"
                     description="Percentage of PV generation consumed on-site during evening"
                     defaultValue={90}
@@ -567,6 +609,7 @@ export default function TimeParametersSection({
                   />
                   
                   <TimeFactorWidget
+                  detailed={detailedMonthly}
                     title="Night Time PV Consumption"
                     description="Percentage of PV generation consumed on-site during night"
                     defaultValue={100}
@@ -584,6 +627,7 @@ export default function TimeParametersSection({
                   </div>
                   
                   <TimeFactorWidget
+                  detailed={detailedMonthly}
                     title="Off Peak PV Consumption (5-14)"
                     description="PV self-consumption during off-peak hours"
                     defaultValue={80}
@@ -593,6 +637,7 @@ export default function TimeParametersSection({
                   />
                   
                   <TimeFactorWidget
+                  detailed={detailedMonthly}
                     title="Half Peak PV Consumption (14-17)"
                     description="PV self-consumption during half-peak afternoon"
                     defaultValue={85}
@@ -602,6 +647,7 @@ export default function TimeParametersSection({
                   />
                   
                   <TimeFactorWidget
+                  detailed={detailedMonthly}
                     title="Peak PV Consumption (17-23)"
                     description="PV self-consumption during peak evening hours"
                     defaultValue={90}
@@ -611,6 +657,7 @@ export default function TimeParametersSection({
                   />
                   
                   <TimeFactorWidget
+                  detailed={detailedMonthly}
                     title="Half Peak PV Consumption (23-5)"
                     description="PV self-consumption during night half-peak hours"
                     defaultValue={70}

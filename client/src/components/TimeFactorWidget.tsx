@@ -14,37 +14,48 @@ interface TimeFactorWidgetProps {
   onChange: (factors: TimeFactors) => void;
   color?: string;
   className?: string;
+  /** When false (default) show a single value applied to all months. When
+   *  true, expose the editable per-month grid for month-by-month tuning. */
+  detailed?: boolean;
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
 
-export default function TimeFactorWidget({ 
-  title, 
+export default function TimeFactorWidget({
+  title,
   description,
-  defaultValue, 
-  factors, 
+  defaultValue,
+  factors,
   onChange,
   color = "primary",
-  className = "" 
+  className = "",
+  detailed = false,
 }: TimeFactorWidgetProps) {
   const [setAllValue, setSetAllValue] = useState(defaultValue);
-  
-  const handleApplyToAll = () => {
+
+  const applyValueToAll = (value: number) => {
     const newFactors = {} as TimeFactors;
     MONTHS.forEach(month => {
-      newFactors[month] = setAllValue / 100;
+      newFactors[month] = value / 100;
     });
     onChange(newFactors);
+  };
+
+  const handleApplyToAll = () => {
+    applyValueToAll(setAllValue);
     console.log(`Applied ${setAllValue}% to all months for ${title}`);
   };
-  
+
   const handleMonthChange = (month: keyof TimeFactors, value: number) => {
     const newFactors = { ...factors };
     newFactors[month] = value / 100; // Convert percentage to decimal
     onChange(newFactors);
     console.log(`Updated ${month} to ${value}% for ${title}`);
   };
-  
+
+  // Simple mode: a single percentage that drives every month directly.
+  const singleValue = Math.round((factors.Jan ?? 0) * 100);
+
   return (
     <Card className={`${className}`}>
       <CardHeader className="pb-4">
@@ -58,56 +69,80 @@ export default function TimeFactorWidget({
         )}
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Set All Controls */}
-        <div className="flex items-center gap-2 p-3 bg-muted/50 rounded-lg">
-          <Label htmlFor={`set-all-${title}`} className="text-sm font-medium">
-            Set all to:
-          </Label>
-          <Input
-            id={`set-all-${title}`}
-            type="number"
-            min="0"
-            max="100"
-            value={setAllValue}
-            onChange={(e) => setSetAllValue(Number(e.target.value))}
-            className="w-20"
-            data-testid={`input-set-all-${title.toLowerCase().replace(/\s+/g, '-')}`}
-          />
-          <span className="text-sm text-muted-foreground">%</span>
-          <Button
-            onClick={handleApplyToAll}
-            size="sm"
-            data-testid={`button-apply-all-${title.toLowerCase().replace(/\s+/g, '-')}`}
-          >
-            Apply for all
-          </Button>
-        </div>
-        
-        {/* Monthly Inputs Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-          {MONTHS.map((month) => (
-            <div key={month} className="space-y-1">
-              <Label htmlFor={`${title}-${month}`} className="text-xs font-medium">
-                {month}:
-              </Label>
-              <div className="relative">
-                <Input
-                  id={`${title}-${month}`}
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={Math.round(factors[month] * 100)}
-                  onChange={(e) => handleMonthChange(month, Number(e.target.value))}
-                  className="text-sm pr-8"
-                  data-testid={`input-factor-${title.toLowerCase().replace(/\s+/g, '-')}-${month.toLowerCase()}`}
-                />
-                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
-                  %
-                </span>
-              </div>
+        {!detailed ? (
+          /* Simple mode: one value applied to every month. */
+          <div className="flex items-center gap-2 p-3 bg-muted/50 rounded-lg">
+            <Label htmlFor={`single-${title}`} className="text-sm font-medium">
+              Value (all months):
+            </Label>
+            <div className="relative w-24">
+              <Input
+                id={`single-${title}`}
+                type="number"
+                min="0"
+                max="100"
+                value={singleValue}
+                onChange={(e) => applyValueToAll(Number(e.target.value))}
+                className="pr-7"
+                data-testid={`input-single-${title.toLowerCase().replace(/\s+/g, '-')}`}
+              />
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">%</span>
             </div>
-          ))}
-        </div>
+          </div>
+        ) : (
+          <>
+            {/* Set All Controls */}
+            <div className="flex items-center gap-2 p-3 bg-muted/50 rounded-lg">
+              <Label htmlFor={`set-all-${title}`} className="text-sm font-medium">
+                Set all to:
+              </Label>
+              <Input
+                id={`set-all-${title}`}
+                type="number"
+                min="0"
+                max="100"
+                value={setAllValue}
+                onChange={(e) => setSetAllValue(Number(e.target.value))}
+                className="w-20"
+                data-testid={`input-set-all-${title.toLowerCase().replace(/\s+/g, '-')}`}
+              />
+              <span className="text-sm text-muted-foreground">%</span>
+              <Button
+                onClick={handleApplyToAll}
+                size="sm"
+                data-testid={`button-apply-all-${title.toLowerCase().replace(/\s+/g, '-')}`}
+              >
+                Apply for all
+              </Button>
+            </div>
+
+            {/* Monthly Inputs Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+              {MONTHS.map((month) => (
+                <div key={month} className="space-y-1">
+                  <Label htmlFor={`${title}-${month}`} className="text-xs font-medium">
+                    {month}:
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      id={`${title}-${month}`}
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={Math.round(factors[month] * 100)}
+                      onChange={(e) => handleMonthChange(month, Number(e.target.value))}
+                      className="text-sm pr-8"
+                      data-testid={`input-factor-${title.toLowerCase().replace(/\s+/g, '-')}-${month.toLowerCase()}`}
+                    />
+                    <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
+                      %
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   );
