@@ -1,5 +1,5 @@
 import { useAuth } from "@/hooks/use-auth";
-import { Loader2, Calculator } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Route } from "wouter";
 import AuthPage from "@/pages/auth-page";
 
@@ -33,19 +33,13 @@ function ProtectedRouteContent({ Component }: { Component: () => React.JSX.Eleme
   return <Component />;
 }
 
-// Branded full-screen loader shown while the session is being resolved, so the
-// first paint isn't a blank screen with a near-invisible spinner.
+// Neutral loader shown while the session is being resolved. Deliberately
+// plain (no logo/gradient) so it is not mistaken for the login screen — a
+// login-lookalike splash reads as the login "rendering twice".
 function AuthSplash() {
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center gap-5 bg-gradient-to-br from-slate-950 via-slate-900 to-orange-900">
-      <div className="relative">
-        <div className="absolute inset-0 bg-gradient-to-r from-orange-600 to-amber-500 rounded-full blur-lg opacity-30 animate-pulse" />
-        <Calculator className="relative h-14 w-14 text-orange-400" />
-      </div>
-      <div className="flex items-center gap-2 text-orange-200/80">
-        <Loader2 className="h-5 w-5 animate-spin" />
-        <span className="text-sm">Loading eSpark Solar Calculator…</span>
-      </div>
+    <div className="min-h-screen flex items-center justify-center bg-background">
+      <Loader2 className="h-8 w-8 animate-spin text-orange-400" />
     </div>
   );
 }
