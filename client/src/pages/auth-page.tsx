@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Loader2, Calculator, Sun, BarChart3, User, Shield, Wrench } from 'lucide-react';
+import { Loader2, Sun, BarChart3, User, Shield, Wrench } from 'lucide-react';
 import { Redirect } from 'wouter';
 
 export default function AuthPage() {
@@ -38,12 +38,17 @@ export default function AuthPage() {
       <div className="relative z-10 min-h-screen flex items-center justify-center p-8">
         <div className="w-full max-w-md space-y-6">
           <div className="text-center">
-            <div className="relative">
-              <div className="absolute inset-0 bg-gradient-to-r from-orange-600 to-amber-500 rounded-full blur-lg opacity-30 animate-pulse" />
-              <Calculator className="relative mx-auto h-16 w-16 text-orange-400" />
+            <div className="relative mx-auto w-fit">
+              <div className="absolute inset-0 bg-gradient-to-r from-orange-600 to-amber-500 rounded-full blur-xl opacity-40 animate-pulse" />
+              <img
+                src="/espark-logo.png"
+                alt="eSpark"
+                className="relative mx-auto h-24 w-auto object-contain drop-shadow-2xl"
+                data-testid="img-auth-logo"
+              />
             </div>
             <h2 className="mt-8 text-4xl font-bold tracking-tight text-white">
-              Solar PV Calculator
+              eSpark PV Calculator
             </h2>
             <p className="mt-2 text-sm text-orange-300/90 font-medium tracking-wide" data-testid="text-credits-auth">
               Created by ENG.Yahya-Khaleld

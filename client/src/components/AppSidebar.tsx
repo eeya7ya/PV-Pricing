@@ -1,14 +1,23 @@
-import { Calculator, BarChart3, TrendingUp, GitCompare, HelpCircle, Users, Sun } from 'lucide-react';
+import { useState } from 'react';
+import { Calculator, BarChart3, TrendingUp, GitCompare, HelpCircle, Users, Sun, ChevronRight, LayoutGrid } from 'lucide-react';
 import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from '@/components/ui/sidebar';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 
 interface AppSidebarProps {
   activeTab: string;
@@ -16,89 +25,100 @@ interface AppSidebarProps {
   isAdmin?: boolean;
 }
 
-const items = [
-  {
-    title: 'System Designer',
-    url: 'designer',
-    icon: Calculator,
-    description: 'Configure and design your solar PV system'
-  },
-  {
-    title: 'PV Design',
-    url: 'pv-design',
-    icon: Sun,
-    description: 'Quick Quote (5 inputs) or Detailed Engineering — Jordan resource model'
-  },
-  {
-    title: 'Dashboard',
-    url: 'dashboard',
-    icon: BarChart3,
-    description: 'View system performance and results'
-  },
-  {
-    title: 'Analysis',
-    url: 'analysis',
-    icon: TrendingUp,
-    description: 'Sensitivity and ROI analysis'
-  },
-  {
-    title: 'Comparison',
-    url: 'comparison',
-    icon: GitCompare,
-    description: 'Compare different scenarios'
-  },
-  {
-    title: 'Help',
-    url: 'help',
-    icon: HelpCircle,
-    description: 'Equations, parameters and documentation'
-  },
-  {
-    title: 'User Management',
-    url: 'users',
-    icon: Users,
-    description: 'Create and manage user accounts',
-    adminOnly: true
-  }
+// Everything related to designing / analysing a system lives behind a single
+// collapsible group so the sidebar stays compact.
+const designItems = [
+  { title: 'System Designer', url: 'designer', icon: Calculator },
+  { title: 'PV Design', url: 'pv-design', icon: Sun },
+  { title: 'Dashboard', url: 'dashboard', icon: BarChart3 },
+  { title: 'Analysis', url: 'analysis', icon: TrendingUp },
+  { title: 'Comparison', url: 'comparison', icon: GitCompare },
+];
+
+const standaloneItems = [
+  { title: 'Help', url: 'help', icon: HelpCircle, adminOnly: false },
+  { title: 'User Management', url: 'users', icon: Users, adminOnly: true },
 ];
 
 export default function AppSidebar({ activeTab, onTabChange, isAdmin = false }: AppSidebarProps) {
-  const visibleItems = items.filter(item => !item.adminOnly || isAdmin);
+  const designActive = designItems.some((item) => item.url === activeTab);
+  const [designOpen, setDesignOpen] = useState(true);
+
+  const visibleStandalone = standaloneItems.filter((item) => !item.adminOnly || isAdmin);
+
   return (
     <Sidebar>
+      <SidebarHeader className="border-b border-sidebar-border">
+        <div className="flex items-center gap-3 px-2 py-3">
+          <img
+            src="/espark-logo.png"
+            alt="eSpark"
+            className="h-9 w-9 rounded-md object-contain"
+            data-testid="img-sidebar-logo"
+          />
+          <div className="flex flex-col leading-tight">
+            <span className="text-sm font-semibold">eSpark PV Calculator</span>
+            <span className="text-[11px] text-muted-foreground">Created by ENG.Yahya-Khaleld</span>
+          </div>
+        </div>
+      </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Solar PV Calculator</SidebarGroupLabel>
-          <div className="px-3 pb-2">
-            <p className="text-xs text-muted-foreground/90 font-medium tracking-wide" data-testid="text-credits-sidebar">
-              Created by ENG.Yahya-Khaleld
-            </p>
-          </div>
           <SidebarGroupContent>
             <SidebarMenu>
-              {visibleItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton 
+              {/* Collapsible "System Design" parent — holds all design / analysis tabs */}
+              <Collapsible
+                open={designOpen || designActive}
+                onOpenChange={setDesignOpen}
+                className="group/collapsible"
+              >
+                <SidebarMenuItem>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton
+                      isActive={designActive}
+                      data-testid="nav-system-design"
+                      className="group transition-colors duration-200 hover:bg-orange-500/10 data-[active=true]:bg-orange-500/15 data-[active=true]:text-orange-200"
+                    >
+                      <LayoutGrid className="h-5 w-5" />
+                      <span className="font-medium">System Design</span>
+                      <ChevronRight className="ml-auto h-4 w-4 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      {designItems.map((item) => (
+                        <SidebarMenuSubItem key={item.url}>
+                          <SidebarMenuSubButton
+                            onClick={() => onTabChange(item.url)}
+                            isActive={activeTab === item.url}
+                            data-testid={`nav-${item.url}`}
+                            className="cursor-pointer transition-colors duration-200 hover:bg-orange-500/10 data-[active=true]:bg-gradient-to-r data-[active=true]:from-orange-500/20 data-[active=true]:to-amber-500/15 data-[active=true]:text-orange-200"
+                          >
+                            <item.icon
+                              className={`h-4 w-4 ${activeTab === item.url ? 'text-orange-400' : ''}`}
+                            />
+                            <span>{item.title}</span>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      ))}
+                    </SidebarMenuSub>
+                  </CollapsibleContent>
+                </SidebarMenuItem>
+              </Collapsible>
+
+              {/* Standalone items */}
+              {visibleStandalone.map((item) => (
+                <SidebarMenuItem key={item.url}>
+                  <SidebarMenuButton
                     onClick={() => onTabChange(item.url)}
                     isActive={activeTab === item.url}
                     data-testid={`nav-${item.url}`}
-                    className="group flex flex-col items-start gap-1 h-auto py-3 border border-transparent transition-all duration-300 hover:bg-orange-500/10 hover:border-orange-500/20 data-[active=true]:bg-gradient-to-r data-[active=true]:from-orange-500/20 data-[active=true]:to-amber-500/15 data-[active=true]:border-orange-500/30 data-[active=true]:shadow-lg data-[active=true]:shadow-orange-500/10"
+                    className="group transition-colors duration-200 hover:bg-orange-500/10 data-[active=true]:bg-orange-500/15 data-[active=true]:text-orange-200"
                   >
-                    <div className="flex items-center gap-2">
-                      <item.icon className={`h-5 w-5 transition-colors duration-300 ${
-                        activeTab === item.url 
-                          ? 'text-orange-500 drop-shadow-sm' 
-                          : 'group-hover:text-orange-400'
-                      }`} />
-                      <span className={`font-medium transition-colors duration-300 ${
-                        activeTab === item.url 
-                          ? 'text-orange-200 dark:text-orange-100 font-semibold' 
-                          : 'group-hover:text-orange-400 dark:group-hover:text-orange-200'
-                      }`}>{item.title}</span>
-                    </div>
-                    <span className="text-xs text-muted-foreground text-left">
-                      {item.description}
-                    </span>
+                    <item.icon
+                      className={`h-5 w-5 ${activeTab === item.url ? 'text-orange-400' : ''}`}
+                    />
+                    <span className="font-medium">{item.title}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
