@@ -45,7 +45,7 @@ interface TimeParametersSectionProps {
   industrialBassConfig?: IndustrialBassConfig;
   onIndustrialBassConfigChange?: (config: IndustrialBassConfig) => void;
   // Update handlers
-  updateField: <K extends keyof any>(field: K, value: any) => void;
+  updateField: (field: any, value: any) => void;
 }
 
 export default function TimeParametersSection({

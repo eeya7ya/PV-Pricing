@@ -3,7 +3,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Calculator, Zap, Building2, Factory } from 'lucide-react';
+import { Zap, Building2, Factory } from 'lucide-react';
 import type { IndustrialBassType, IndustrialBassConfig } from '@shared/schema';
 
 interface SystemConfigurationProps {
@@ -11,8 +11,6 @@ interface SystemConfigurationProps {
   degradation: number;
   tariffSupported: boolean;
   exportTariff: number;
-  pvSize?: number;
-  inverterSize?: number;
   customerType: string;
   gridConnection: string;
   onEfficiencyChange: (value: number) => void;
@@ -30,8 +28,6 @@ export default function SystemConfiguration({
   degradation,
   tariffSupported,
   exportTariff,
-  pvSize,
-  inverterSize,
   customerType,
   gridConnection,
   onEfficiencyChange,
@@ -42,46 +38,11 @@ export default function SystemConfiguration({
   industrialBassConfig,
   onIndustrialBassConfigChange
 }: SystemConfigurationProps) {
-  
+
   const isIndustrialBuyAllSellAll = customerType === 'Industrial' && gridConnection === 'Buy all sell all';
-  
+
   return (
     <div className={`space-y-6 ${className}`}>
-      {/* System Sizing Display */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Calculator className="h-5 w-5" />
-            System Sizing
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label className="text-sm font-medium">Monthly PV Generation:</Label>
-              <div className="flex items-center gap-2">
-                <Badge variant="secondary" className="text-lg px-3 py-1">
-                  <span data-testid="text-pv-size">
-                    {pvSize ? `${pvSize.toFixed(2)} kWh/month` : 'Will be calculated automatically'}
-                  </span>
-                </Badge>
-              </div>
-            </div>
-            
-            <div className="space-y-2">
-              <Label className="text-sm font-medium">Estimated Inverter Size:</Label>
-              <div className="flex items-center gap-2">
-                <Badge variant="secondary" className="text-lg px-3 py-1">
-                  <span data-testid="text-inverter-size">
-                    {inverterSize ? `${inverterSize.toFixed(2)} kW` : 'Will be calculated automatically'}
-                  </span>
-                </Badge>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
       {/* System Parameters */}
       <Card>
         <CardHeader>

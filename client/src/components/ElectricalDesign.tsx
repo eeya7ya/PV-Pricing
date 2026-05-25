@@ -1,11 +1,16 @@
 /**
- * Analysis — self-service PV designer.
+ * Electrical self-design & Bill of Quantities.
  *
  * The user picks a module (per-module W_dc at STC) and an inverter (kWac +
- * DC window), and the page computes a buildable string layout, DC/AC cable
+ * DC window); the engine computes a buildable string layout, DC/AC cable
  * cross-sections (ampacity + voltage-drop), DC/AC protection ratings, a bill
  * of quantities and a single-line diagram. Pure engine lives in
  * `shared/pvElectrical.ts`; this file is presentation + input wiring only.
+ *
+ * Inputs (`ElectricalInputs`) live on the Inputs tab; the sizing output
+ * (`ElectricalResults`) lives under the Results tab. The target array size
+ * is NOT asked for here — it is read from the PV Design system size so the
+ * project has a single source of truth for "system size".
  */
 
 import { useMemo, useState } from 'react';
@@ -19,7 +24,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import {
   Cable, Cpu, Gauge, Settings2, AlertTriangle, CircuitBoard, Sun, Zap, ListChecks,
 } from 'lucide-react';
-import type { CalculationResults } from '@shared/schema';
 import { INVERTER_LIBRARY, MODULE_LIBRARY, type InverterRecord } from '@shared/jordanPVDesign';
 import {
   designElectrical,
@@ -29,16 +33,45 @@ import {
   type ElectricalDesign,
 } from '@shared/pvElectrical';
 
-interface AnalysisSectionProps {
-  customerType: string;
-  gridConnection: string;
-  results?: CalculationResults;
-  efficiency: number;
-  degradation: number;
-  tariffSupported: boolean;
-  exportTariff: number;
-  consumption: any;
-  industrialTariffs?: any;
+// ===========================================================================
+// Lifted state
+// ===========================================================================
+export interface ElectricalState {
+  moduleId: string;
+  moduleWp: number;
+  inverterId: string;
+  dcLen: number;
+  acLen: number;
+  tMin: number;
+  tMaxCell: number;
+  // Advanced module electrical overrides (seeded from defaults for the Wp).
+  voc: number;
+  vmp: number;
+  isc: number;
+  imp: number;
+  tcVoc: number;
+  maxFuse: number;
+}
+
+export function defaultElectricalState(): ElectricalState {
+  const moduleId = 'JKM-TN-605';
+  const wp = MODULE_LIBRARY[moduleId].wp;
+  const s = defaultModuleElectrical(wp);
+  return {
+    moduleId,
+    moduleWp: wp,
+    inverterId: 'HUA-SUN-5KTL',
+    dcLen: 30,
+    acLen: 15,
+    tMin: -5,
+    tMaxCell: 70,
+    voc: s.vocStc,
+    vmp: s.vmpStc,
+    isc: Number(s.iscStc.toFixed(2)),
+    imp: Number(s.impStc.toFixed(2)),
+    tcVoc: MODULE_LIBRARY[moduleId].tempCoeffPct,
+    maxFuse: s.maxSeriesFuseA,
+  };
 }
 
 /** Build a full electrical spec from a catalogue inverter with typical DC windows. */
@@ -57,75 +90,83 @@ function inverterElectrical(rec: InverterRecord): InverterElectrical {
   };
 }
 
-export default function AnalysisSection({ results }: AnalysisSectionProps) {
+function buildDesign(state: ElectricalState, targetKWp: number): ElectricalDesign {
+  const module: ModuleElectrical = {
+    wp: state.moduleWp, vocStc: state.voc, vmpStc: state.vmp, iscStc: state.isc,
+    impStc: state.imp, tempCoeffVocPctPerC: state.tcVoc, maxSeriesFuseA: state.maxFuse,
+  };
+  const inverter = inverterElectrical(INVERTER_LIBRARY[state.inverterId]);
+  return designElectrical({
+    module, inverter, targetKWpDC: targetKWp,
+    site: { tMinC: state.tMin, tMaxCellC: state.tMaxCell },
+    dcCableLengthM: state.dcLen, acCableLengthM: state.acLen,
+  });
+}
+
+/** Everything needed to render the single-line diagram from lifted state.
+ *  Reused by the print/export technical report. */
+export function electricalSLD(state: ElectricalState, targetKWp: number) {
+  const design = buildDesign(state, targetKWp);
+  const invRec = INVERTER_LIBRARY[state.inverterId];
+  const inverter = inverterElectrical(invRec);
+  return {
+    design,
+    inverterLabel: `${invRec.brand} ${invRec.kWac} kW`,
+    acVoltageV: inverter.acVoltageV,
+    phases: invRec.phases,
+  };
+}
+
+// ===========================================================================
+// Inputs (Inputs tab)
+// ===========================================================================
+interface InputsProps {
+  state: ElectricalState;
+  onChange: (s: ElectricalState) => void;
+  /** System size (kWp DC) from PV Design — single source of truth. */
+  targetKWp: number;
+}
+
+export function ElectricalInputs({ state, onChange, targetKWp }: InputsProps) {
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const inverterIds = Object.keys(INVERTER_LIBRARY);
   const moduleIds = Object.keys(MODULE_LIBRARY);
 
-  // ---- design state -------------------------------------------------------
-  const [moduleId, setModuleId] = useState<string>('JKM-TN-605');
-  const [moduleWp, setModuleWp] = useState<number>(MODULE_LIBRARY['JKM-TN-605'].wp);
-  const [inverterId, setInverterId] = useState<string>('HUA-SUN-5KTL');
-  const [targetKWp, setTargetKWp] = useState<number>(
-    Math.max(1, Number((results?.annual_summary as any)?.kwp_dc) || 5),
-  );
-  const [dcLen, setDcLen] = useState<number>(30);
-  const [acLen, setAcLen] = useState<number>(15);
-  const [tMin, setTMin] = useState<number>(-5);
-  const [tMaxCell, setTMaxCell] = useState<number>(70);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-
-  // Advanced module electrical overrides (seeded from defaults for the Wp).
-  const seed = defaultModuleElectrical(moduleWp);
-  const [voc, setVoc] = useState<number>(seed.vocStc);
-  const [vmp, setVmp] = useState<number>(seed.vmpStc);
-  const [isc, setIsc] = useState<number>(Number(seed.iscStc.toFixed(2)));
-  const [imp, setImp] = useState<number>(Number(seed.impStc.toFixed(2)));
-  const [tcVoc, setTcVoc] = useState<number>(seed.tempCoeffVocPctPerC);
-  const [maxFuse, setMaxFuse] = useState<number>(seed.maxSeriesFuseA);
+  const update = (patch: Partial<ElectricalState>) => onChange({ ...state, ...patch });
 
   const applyModulePreset = (id: string) => {
-    setModuleId(id);
     const wp = MODULE_LIBRARY[id].wp;
-    setModuleWp(wp);
     const s = defaultModuleElectrical(wp);
-    setVoc(s.vocStc); setVmp(s.vmpStc);
-    setIsc(Number(s.iscStc.toFixed(2))); setImp(Number(s.impStc.toFixed(2)));
-    setTcVoc(MODULE_LIBRARY[id].tempCoeffPct);
+    onChange({
+      ...state,
+      moduleId: id,
+      moduleWp: wp,
+      voc: s.vocStc,
+      vmp: s.vmpStc,
+      isc: Number(s.iscStc.toFixed(2)),
+      imp: Number(s.impStc.toFixed(2)),
+      tcVoc: MODULE_LIBRARY[id].tempCoeffPct,
+      maxFuse: s.maxSeriesFuseA,
+    });
   };
 
-  const module: ModuleElectrical = {
-    wp: moduleWp, vocStc: voc, vmpStc: vmp, iscStc: isc, impStc: imp,
-    tempCoeffVocPctPerC: tcVoc, maxSeriesFuseA: maxFuse,
-  };
-  const inverter = inverterElectrical(INVERTER_LIBRARY[inverterId]);
-
-  const design: ElectricalDesign = useMemo(
-    () => designElectrical({
-      module, inverter, targetKWpDC: targetKWp,
-      site: { tMinC: tMin, tMaxCellC: tMaxCell },
-      dcCableLengthM: dcLen, acCableLengthM: acLen,
-    }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [moduleWp, voc, vmp, isc, imp, tcVoc, maxFuse, inverterId, targetKWp, tMin, tMaxCell, dcLen, acLen],
-  );
-
-  const invRec = INVERTER_LIBRARY[inverterId];
+  const invRec = INVERTER_LIBRARY[state.inverterId];
+  const inverter = inverterElectrical(invRec);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-2xl font-semibold flex items-center gap-2">
-            <CircuitBoard className="h-6 w-6 text-primary" /> PV Self-Design &amp; Electrical BoS
-          </h2>
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <CircuitBoard className="h-5 w-5 text-primary" /> Electrical BoS — module &amp; inverter
+          </h3>
           <p className="text-sm text-muted-foreground mt-1">
-            Size strings, cables and protection from your module and inverter — IEC 62548 / 60364 basis.
+            Pick a module and inverter. Strings, cables, protection and the single-line diagram
+            are sized under the Results tab — IEC 62548 / 60364 basis.
           </p>
         </div>
-        <Badge variant="outline">Single-line diagram included</Badge>
       </div>
 
-      {/* ===== Inputs ===== */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Module */}
         <Card>
@@ -137,7 +178,7 @@ export default function AnalysisSection({ results }: AnalysisSectionProps) {
           <CardContent className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <Field label="Module preset">
-                <Select value={moduleId} onValueChange={applyModulePreset}>
+                <Select value={state.moduleId} onValueChange={applyModulePreset}>
                   <SelectTrigger data-testid="select-module"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {moduleIds.map((id) => (
@@ -148,19 +189,19 @@ export default function AnalysisSection({ results }: AnalysisSectionProps) {
                   </SelectContent>
                 </Select>
               </Field>
-              <NumField label="Module W_dc @ STC" v={moduleWp} step={5} on={setModuleWp} testid="input-module-wp" />
+              <NumField label="Module W_dc @ STC" v={state.moduleWp} step={5} on={(x) => update({ moduleWp: x })} testid="input-module-wp" />
             </div>
             <Button size="sm" variant="ghost" onClick={() => setShowAdvanced((s) => !s)} className="gap-2 px-0">
               <Settings2 className="h-3 w-3" /> {showAdvanced ? 'Hide' : 'Show'} module electrical (Voc/Vmp/Isc/Imp)
             </Button>
             {showAdvanced && (
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3 pt-1">
-                <NumField label="Voc STC (V)" v={voc} step={0.1} on={setVoc} />
-                <NumField label="Vmp STC (V)" v={vmp} step={0.1} on={setVmp} />
-                <NumField label="Isc STC (A)" v={isc} step={0.1} on={setIsc} />
-                <NumField label="Imp STC (A)" v={imp} step={0.1} on={setImp} />
-                <NumField label="Voc temp-co (%/°C)" v={tcVoc} step={0.01} on={setTcVoc} />
-                <NumField label="Max series fuse (A)" v={maxFuse} step={1} on={setMaxFuse} />
+                <NumField label="Voc STC (V)" v={state.voc} step={0.1} on={(x) => update({ voc: x })} />
+                <NumField label="Vmp STC (V)" v={state.vmp} step={0.1} on={(x) => update({ vmp: x })} />
+                <NumField label="Isc STC (A)" v={state.isc} step={0.1} on={(x) => update({ isc: x })} />
+                <NumField label="Imp STC (A)" v={state.imp} step={0.1} on={(x) => update({ imp: x })} />
+                <NumField label="Voc temp-co (%/°C)" v={state.tcVoc} step={0.01} on={(x) => update({ tcVoc: x })} />
+                <NumField label="Max series fuse (A)" v={state.maxFuse} step={1} on={(x) => update({ maxFuse: x })} />
               </div>
             )}
           </CardContent>
@@ -176,7 +217,7 @@ export default function AnalysisSection({ results }: AnalysisSectionProps) {
           <CardContent className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <Field label="Inverter">
-                <Select value={inverterId} onValueChange={setInverterId}>
+                <Select value={state.inverterId} onValueChange={(v) => update({ inverterId: v })}>
                   <SelectTrigger data-testid="select-inverter"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {inverterIds.map((id) => (
@@ -187,7 +228,12 @@ export default function AnalysisSection({ results }: AnalysisSectionProps) {
                   </SelectContent>
                 </Select>
               </Field>
-              <NumField label="Target array (kWp DC)" v={targetKWp} step={0.5} on={setTargetKWp} testid="input-target-kwp" />
+              <Field label="Target array (kWp DC)">
+                <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 text-sm font-mono">
+                  {targetKWp.toFixed(2)}
+                </div>
+                <p className="text-[11px] text-muted-foreground">From PV Design system size</p>
+              </Field>
             </div>
             <div className="text-xs text-muted-foreground font-mono">
               {invRec.kWac} kWac · {invRec.phases}-phase · {inverter.mppts} MPPT ·
@@ -195,13 +241,38 @@ export default function AnalysisSection({ results }: AnalysisSectionProps) {
               {inverter.maxDcCurrentPerMpptA} A/MPPT
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <NumField label="DC run (m)" v={dcLen} step={1} on={setDcLen} />
-              <NumField label="AC run (m)" v={acLen} step={1} on={setAcLen} />
-              <NumField label="T min (°C)" v={tMin} step={1} on={setTMin} />
-              <NumField label="T cell max (°C)" v={tMaxCell} step={1} on={setTMaxCell} />
+              <NumField label="DC run (m)" v={state.dcLen} step={1} on={(x) => update({ dcLen: x })} />
+              <NumField label="AC run (m)" v={state.acLen} step={1} on={(x) => update({ acLen: x })} />
+              <NumField label="T min (°C)" v={state.tMin} step={1} on={(x) => update({ tMin: x })} />
+              <NumField label="T cell max (°C)" v={state.tMaxCell} step={1} on={(x) => update({ tMaxCell: x })} />
             </div>
           </CardContent>
         </Card>
+      </div>
+    </div>
+  );
+}
+
+// ===========================================================================
+// Results (Results tab → Electrical & BoS)
+// ===========================================================================
+export function ElectricalResults({ state, targetKWp }: { state: ElectricalState; targetKWp: number }) {
+  const design = useMemo(() => buildDesign(state, targetKWp), [state, targetKWp]);
+  const invRec = INVERTER_LIBRARY[state.inverterId];
+  const inverter = inverterElectrical(invRec);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-2xl font-semibold flex items-center gap-2">
+            <CircuitBoard className="h-6 w-6 text-primary" /> PV Self-Design &amp; Electrical BoS
+          </h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Strings, cables and protection sized from your module &amp; inverter — IEC 62548 / 60364 basis.
+          </p>
+        </div>
+        <Badge variant="outline">Single-line diagram included</Badge>
       </div>
 
       {/* ===== Warnings ===== */}
@@ -318,7 +389,7 @@ export default function AnalysisSection({ results }: AnalysisSectionProps) {
               </tr>
             </thead>
             <tbody>
-              <BoqRow item="PV modules" spec={`${MODULE_LIBRARY[moduleId]?.brand ?? 'Module'} ${moduleWp} W`} qty={`${design.strings.modulesTotal} pcs`} />
+              <BoqRow item="PV modules" spec={`${MODULE_LIBRARY[state.moduleId]?.brand ?? 'Module'} ${state.moduleWp} W`} qty={`${design.strings.modulesTotal} pcs`} />
               <BoqRow item="Inverter" spec={`${invRec.brand} ${invRec.kWac} kW ${invRec.phases}Φ`} qty="1 pc" />
               <BoqRow item="DC cable (PV)" spec={`${design.dcCable.finalSizeMm2} mm² solar cable`} qty={`≈ ${(design.dcCable.lengthM * 2 * design.strings.stringsPerMppt * inverter.mppts).toFixed(0)} m`} />
               <BoqRow item="AC cable" spec={`${design.acCable.finalSizeMm2} mm² ${invRec.phases === 3 ? '4/5-core' : '3-core'}`} qty={`≈ ${(design.acCable.lengthM * (invRec.phases === 3 ? 4 : 2)).toFixed(0)} m`} />
@@ -332,7 +403,7 @@ export default function AnalysisSection({ results }: AnalysisSectionProps) {
             </tbody>
           </table>
           <p className="text-xs text-muted-foreground mt-3">
-            Sizing basis: string voltages from module Voc/Vmp at {tMin} °C / {tMaxCell} °C cell; cable from 1.25× current
+            Sizing basis: string voltages from module Voc/Vmp at {state.tMin} °C / {state.tMaxCell} °C cell; cable from 1.25× current
             ampacity then upsized for ≤2 % DC / ≤1 % AC voltage drop (Cu, ρ = 0.0225 Ω·mm²/m); protection per IEC 62548.
             Verify against the actual datasheets and DISCO connection rules before procurement.
           </p>
@@ -345,13 +416,16 @@ export default function AnalysisSection({ results }: AnalysisSectionProps) {
 // ===========================================================================
 // Single-line diagram (SVG)
 // ===========================================================================
-function SingleLineDiagram({
-  design, inverterLabel, acVoltageV, phases,
+export function SingleLineDiagram({
+  design, inverterLabel, acVoltageV, phases, responsive = false,
 }: {
   design: ElectricalDesign;
   inverterLabel: string;
   acVoltageV: number;
   phases: 1 | 3;
+  /** When true, the SVG scales to its container (used in the print report)
+   *  instead of forcing its native width with horizontal scroll. */
+  responsive?: boolean;
 }) {
   const s = design.strings;
   // Layout coordinates.
@@ -379,8 +453,12 @@ function SingleLineDiagram({
   );
 
   return (
-    <div className="w-full overflow-x-auto">
-      <svg viewBox={`0 0 ${width} 170`} className="text-foreground" style={{ minWidth: width }}>
+    <div className={responsive ? 'w-full' : 'w-full overflow-x-auto'}>
+      <svg
+        viewBox={`0 0 ${width} 170`}
+        className="text-foreground"
+        style={responsive ? { width: '100%', height: 'auto' } : { minWidth: width }}
+      >
         {/* connectors first (under boxes) */}
         {connector(xs[0] + boxW, xs[1], `DC ${design.dcCable.finalSizeMm2}mm²`, `${s.stringVmpHotV.toFixed(0)}V · ${(design.dcCable.designCurrentA).toFixed(0)}A`)}
         {connector(xs[1] + boxW, xs[2], `AC ${design.acCable.finalSizeMm2}mm²`, `${design.protection.acBreakerA}A breaker`)}

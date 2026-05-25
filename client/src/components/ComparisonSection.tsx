@@ -1,22 +1,12 @@
-import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
-import { 
-  Zap, 
-  TrendingUp, 
-  TrendingDown, 
-  Calculator,
+import {
   BarChart3,
   ArrowUpDown,
   Calendar,
   Sun,
   Home,
-  Building2,
   PiggyBank
 } from 'lucide-react';
 import type { CalculationResults } from '@shared/schema';
@@ -27,14 +17,13 @@ interface ComparisonSectionProps {
 }
 
 export default function ComparisonSection({ results, customerType }: ComparisonSectionProps) {
-  const [activeTab, setActiveTab] = useState('current');
-
   if (!results) {
     return (
       <div className="text-center py-12">
         <h2 className="text-2xl font-semibold mb-4">System Comparison</h2>
         <p className="text-muted-foreground">
-          Configure your system parameters and calculate to view detailed comparisons.
+          Configure your system parameters and click "Calculate System" to view the detailed
+          before/after comparison for the current case.
         </p>
       </div>
     );
@@ -54,27 +43,15 @@ export default function ComparisonSection({ results, customerType }: ComparisonS
   return (
     <div className="space-y-6">
       {/* Header Section */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <ArrowUpDown className="h-6 w-6 text-primary" />
-        <h2 className="text-2xl font-semibold">System Comparison Analysis</h2>
+        <h2 className="text-2xl font-semibold">Current Case — Before vs After</h2>
         <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
           {customerType} Analysis
         </Badge>
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="current" className="flex items-center gap-2" data-testid="tab-current-study">
-            <BarChart3 className="h-4 w-4" />
-            Current Study Case
-          </TabsTrigger>
-          <TabsTrigger value="different" className="flex items-center gap-2" data-testid="tab-different-study">
-            <Calculator className="h-4 w-4" />
-            Different Study Case
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="current" className="space-y-6">
+      <div className="space-y-6">
           {/* Current Study Case Content */}
           <Card>
             <CardHeader>
@@ -374,48 +351,7 @@ export default function ComparisonSection({ results, customerType }: ComparisonS
               </CardContent>
             </Card>
           )}
-        </TabsContent>
-
-        <TabsContent value="different" className="space-y-6">
-          {/* Different Study Case Content */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Calculator className="h-5 w-5" />
-                Compare Different Scenarios
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="text-center py-12">
-                <div className="text-muted-foreground mb-4">
-                  <Calculator className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" />
-                  <h3 className="text-lg font-semibold">Different Scenario Comparison</h3>
-                  <p className="text-sm">
-                    This feature allows you to compare different system configurations, sizes, and parameters.
-                  </p>
-                </div>
-                
-                <div className="space-y-4">
-                  <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200">
-                    <h4 className="font-semibold text-blue-700 dark:text-blue-200 mb-2">Coming Soon</h4>
-                    <p className="text-sm text-blue-600 dark:text-blue-300">
-                      • Compare different PV system sizes<br/>
-                      • Test various efficiency settings<br/>
-                      • Analyze different customer types<br/>
-                      • Evaluate multiple tariff scenarios
-                    </p>
-                  </div>
-                  
-                  <Button variant="outline" disabled>
-                    <TrendingUp className="h-4 w-4 mr-2" />
-                    Set Up Comparison Scenario
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+      </div>
     </div>
   );
 }

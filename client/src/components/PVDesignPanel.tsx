@@ -1,5 +1,5 @@
 /**
- * PV Design Panel — two-tier UI on the same physics engine.
+ * PV Design — two-tier UI on the same physics engine.
  *
  *   Tier 1 "Quick Quote"         — 5 inputs (region, sizing mode, size,
  *                                  system type, optional PR override).
@@ -8,6 +8,10 @@
  * Both tiers produce the same `YieldResult`. When the user toggles
  * "Apply to billing", the monthly kWh from this engine overrides the
  * consumption-based PV generation in the tariff/billing pipeline.
+ *
+ * Inputs (`PVDesignInputs`) live on the Inputs tab; the Year-1 yield
+ * output (`PVDesignResults`) lives under the Results tab. Both read the
+ * same `PVDesignState` so there is a single source of truth.
  */
 
 import { useMemo, useState } from 'react';
@@ -70,30 +74,39 @@ export function defaultPVDesignState(): PVDesignState {
   };
 }
 
+/** DC nameplate (kWp) implied by the current PV-design inputs, regardless of
+ *  tier or sizing mode. Single source of truth for "system size" — the
+ *  electrical designer reads this instead of asking for the size again. */
+export function pvDesignDcKWp(s: PVDesignState): number {
+  if (s.tier === 'detailed') return s.detailed.dcKWp;
+  return s.sizingMode === 'kWp'
+    ? s.sizeValue
+    : kWpFromRoofArea(s.sizeValue, s.systemType);
+}
+
 interface Props {
   state: PVDesignState;
   onChange: (s: PVDesignState) => void;
 }
 
-export default function PVDesignPanel({ state, onChange }: Props) {
-  const [showLossWaterfall, setShowLossWaterfall] = useState(false);
+/** Compute Year-1 yield live from the current PV-design inputs. */
+function yieldFromState(state: PVDesignState): YieldResult {
+  if (state.tier === 'quick') {
+    return quickQuoteYield({
+      region: state.region,
+      sizingMode: state.sizingMode,
+      sizeValue: state.sizeValue,
+      systemType: state.systemType,
+      prOverride: state.prOverride ?? undefined,
+    });
+  }
+  return calculatePVYield(state.detailed);
+}
 
-  // Compute yield live from current inputs.
-  const result: YieldResult = useMemo(() => {
-    if (state.tier === 'quick') {
-      return quickQuoteYield({
-        region: state.region,
-        sizingMode: state.sizingMode,
-        sizeValue: state.sizeValue,
-        systemType: state.systemType,
-        prOverride: state.prOverride ?? undefined,
-      });
-    }
-    return calculatePVYield(state.detailed);
-  }, [state]);
-
-  const region = JORDAN_REGIONS[state.region];
-
+// ===========================================================================
+// Inputs (Inputs tab)
+// ===========================================================================
+export function PVDesignInputs({ state, onChange }: Props) {
   const update = (patch: Partial<PVDesignState>) => onChange({ ...state, ...patch });
   const updateDetailed = (patch: Partial<DetailedInputs>) =>
     onChange({ ...state, detailed: { ...state.detailed, ...patch } });
@@ -116,8 +129,6 @@ export default function PVDesignPanel({ state, onChange }: Props) {
       update({ tier });
     }
   };
-
-  const monthLabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
   return (
     <div className="space-y-6">
@@ -165,119 +176,134 @@ export default function PVDesignPanel({ state, onChange }: Props) {
           </div>
           <p className="text-sm text-muted-foreground mt-2">
             {state.tier === 'quick'
-              ? 'Salesperson-grade quote — 5 inputs, sensible Jordan defaults, one PR knob.'
-              : 'Engineer-grade — every loss-chain factor exposed. Same physics engine.'}
+              ? 'Salesperson-grade quote — 5 inputs, sensible Jordan defaults, one PR knob. See the Year-1 yield under the Results tab.'
+              : 'Engineer-grade — every loss-chain factor exposed. Same physics engine. See the Year-1 yield under the Results tab.'}
           </p>
         </CardHeader>
       </Card>
 
-      {/* ===== Inputs ===== */}
       {state.tier === 'quick' ? <QuickTier state={state} update={update} /> :
         <DetailedTier state={state} updateDetailed={updateDetailed} />}
+    </div>
+  );
+}
 
-      {/* ===== Results ===== */}
-      <Card>
-        <CardHeader>
+// ===========================================================================
+// Results (Results tab → PV Yield)
+// ===========================================================================
+export function PVDesignResults({ state }: { state: PVDesignState }) {
+  const [showLossWaterfall, setShowLossWaterfall] = useState(false);
+  const result = useMemo(() => yieldFromState(state), [state]);
+  const region = JORDAN_REGIONS[state.region];
+  const monthLabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <CardTitle className="flex items-center gap-2">
             <CheckCircle className="h-5 w-5 text-green-600" />
-            Year-1 yield
+            PV Design — Year-1 yield
           </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Metric label="Annual energy" value={`${result.annualKWh_year1.toFixed(0)} kWh`} accent />
-            <Metric label="Specific yield" value={`${result.specificYield_kWhPerKWpYear.toFixed(0)} kWh/kWp·yr`} />
-            <Metric label="Performance Ratio" value={result.performanceRatio.toFixed(3)} />
-            <Metric label="DC nameplate" value={`${result.lossBreakdown.dcKWp.toFixed(2)} kWp`} />
-          </div>
+          <Badge variant={state.enabled ? 'default' : 'outline'} className="text-xs">
+            {state.enabled ? 'Applied to billing' : 'Not applied to billing'}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <Metric label="Annual energy" value={`${result.annualKWh_year1.toFixed(0)} kWh`} accent />
+          <Metric label="Specific yield" value={`${result.specificYield_kWhPerKWpYear.toFixed(0)} kWh/kWp·yr`} />
+          <Metric label="Performance Ratio" value={result.performanceRatio.toFixed(3)} />
+          <Metric label="DC nameplate" value={`${result.lossBreakdown.dcKWp.toFixed(2)} kWp`} />
+        </div>
 
-          <Separator />
+        <Separator />
 
-          {/* Monthly bars */}
-          <div>
-            <Label className="text-sm font-medium mb-2 inline-block">
-              Monthly kWh — year 1
-            </Label>
-            <div className="grid grid-cols-12 gap-1 items-end h-24 mt-2">
-              {result.monthlyKWh_year1.map((kwh, i) => {
-                const max = Math.max(...result.monthlyKWh_year1);
-                const pct = max > 0 ? (kwh / max) * 100 : 0;
-                return (
-                  <div key={i} className="flex flex-col items-center gap-1">
-                    <div className="w-full flex items-end h-20">
-                      <div
-                        className="w-full bg-amber-400 rounded-t"
-                        style={{ height: `${pct}%` }}
-                        title={`${monthLabels[i]}: ${kwh.toFixed(0)} kWh`}
-                      />
-                    </div>
-                    <span className="text-[10px] text-muted-foreground">{monthLabels[i]}</span>
+        {/* Monthly bars */}
+        <div>
+          <Label className="text-sm font-medium mb-2 inline-block">
+            Monthly kWh — year 1
+          </Label>
+          <div className="grid grid-cols-12 gap-1 items-end h-24 mt-2">
+            {result.monthlyKWh_year1.map((kwh, i) => {
+              const max = Math.max(...result.monthlyKWh_year1);
+              const pct = max > 0 ? (kwh / max) * 100 : 0;
+              return (
+                <div key={i} className="flex flex-col items-center gap-1">
+                  <div className="w-full flex items-end h-20">
+                    <div
+                      className="w-full bg-amber-400 rounded-t"
+                      style={{ height: `${pct}%` }}
+                      title={`${monthLabels[i]}: ${kwh.toFixed(0)} kWh`}
+                    />
                   </div>
-                );
-              })}
-            </div>
-            <div className="grid grid-cols-12 gap-1 text-[10px] text-center font-mono text-muted-foreground mt-1">
-              {result.monthlyKWh_year1.map((k, i) => (
-                <div key={i}>{k.toFixed(0)}</div>
-              ))}
-            </div>
+                  <span className="text-[10px] text-muted-foreground">{monthLabels[i]}</span>
+                </div>
+              );
+            })}
           </div>
-
-          {/* Sanity check anchor for the region */}
-          <div className="text-xs text-muted-foreground border-t pt-3">
-            <Map className="h-3 w-3 inline mr-1" />
-            <strong>{region.label}</strong> · PVOUT<sub>fix</sub> = {region.pvoutFix} kWh/kWp·yr ·
-            tilt<sub>opt</sub> = {region.tiltOpt}° · zone {region.zone} · soiling {region.soilingClass}
-            {result.prShortcut && (
-              <span className="ml-2 text-amber-700">
-                · Tier-1 PR shortcut (loss chain skipped)
-              </span>
-            )}
+          <div className="grid grid-cols-12 gap-1 text-[10px] text-center font-mono text-muted-foreground mt-1">
+            {result.monthlyKWh_year1.map((k, i) => (
+              <div key={i}>{k.toFixed(0)}</div>
+            ))}
           </div>
+        </div>
 
-          {/* Loss waterfall (Tier 2 only) */}
-          {!result.prShortcut && (
-            <>
-              <Separator />
-              <div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setShowLossWaterfall(!showLossWaterfall)}
-                  className="gap-2"
-                >
-                  <Settings className="h-3 w-3" />
-                  {showLossWaterfall ? 'Hide' : 'Show'} loss waterfall
-                </Button>
-                {showLossWaterfall && (
-                  <table className="w-full text-xs mt-2 border-collapse">
-                    <thead>
-                      <tr className="border-b">
-                        <th className="text-left p-1">Stage</th>
-                        <th className="text-right p-1">Energy (kWh)</th>
-                        <th className="text-right p-1">Loss / gain</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.lossBreakdown.stages.map((s, i) => (
-                        <tr key={i} className="border-b">
-                          <td className="p-1">{s.name}</td>
-                          <td className="p-1 text-right font-mono">{s.energyKWh.toFixed(0)}</td>
-                          <td className="p-1 text-right font-mono">
-                            {s.lossPct > 0 ? `−${s.lossPct.toFixed(2)}%` :
-                             s.lossPct < 0 ? `+${(-s.lossPct).toFixed(2)}%` : '—'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </>
+        {/* Sanity check anchor for the region */}
+        <div className="text-xs text-muted-foreground border-t pt-3">
+          <Map className="h-3 w-3 inline mr-1" />
+          <strong>{region.label}</strong> · PVOUT<sub>fix</sub> = {region.pvoutFix} kWh/kWp·yr ·
+          tilt<sub>opt</sub> = {region.tiltOpt}° · zone {region.zone} · soiling {region.soilingClass}
+          {result.prShortcut && (
+            <span className="ml-2 text-amber-700">
+              · Tier-1 PR shortcut (loss chain skipped)
+            </span>
           )}
-        </CardContent>
-      </Card>
-    </div>
+        </div>
+
+        {/* Loss waterfall (Tier 2 only) */}
+        {!result.prShortcut && (
+          <>
+            <Separator />
+            <div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setShowLossWaterfall(!showLossWaterfall)}
+                className="gap-2"
+              >
+                <Settings className="h-3 w-3" />
+                {showLossWaterfall ? 'Hide' : 'Show'} loss waterfall
+              </Button>
+              {showLossWaterfall && (
+                <table className="w-full text-xs mt-2 border-collapse">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left p-1">Stage</th>
+                      <th className="text-right p-1">Energy (kWh)</th>
+                      <th className="text-right p-1">Loss / gain</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.lossBreakdown.stages.map((s, i) => (
+                      <tr key={i} className="border-b">
+                        <td className="p-1">{s.name}</td>
+                        <td className="p-1 text-right font-mono">{s.energyKWh.toFixed(0)}</td>
+                        <td className="p-1 text-right font-mono">
+                          {s.lossPct > 0 ? `−${s.lossPct.toFixed(2)}%` :
+                           s.lossPct < 0 ? `+${(-s.lossPct).toFixed(2)}%` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

@@ -31,6 +31,7 @@ import {
   type YieldResult,
 } from '@shared/jordanPVDesign';
 import { type PVDesignState, defaultPVDesignState } from '@/components/PVDesignPanel';
+import { type ElectricalState, defaultElectricalState } from '@/components/ElectricalDesign';
 
 /**
  * Map the project's grid-connection labels onto the Bylaw 58/2024 + legacy
@@ -114,13 +115,18 @@ interface CalculatorState {
   // When `pvDesign.enabled` is true, the physics engine's monthly kWh vector
   // overrides the consumption-based PV generation in the billing pipeline.
   pvDesign: PVDesignState;
+
+  // Electrical Balance-of-System self-design (module + inverter selection).
+  // Drives the string/cable/protection sizing and single-line diagram shown
+  // under the Results tab. Target array size is taken from `pvDesign`.
+  electrical: ElectricalState;
 }
 
 interface CalculatorLogicProps {
   children: (props: {
     state: CalculatorState;
     setState: React.Dispatch<React.SetStateAction<CalculatorState>>;
-    calculate: () => void;
+    calculate: (opts?: { onSuccess?: () => void }) => void;
     results?: CalculationResults;
     isCalculating: boolean;
     updateField: <K extends keyof CalculatorState>(field: K, value: CalculatorState[K]) => void;
@@ -260,6 +266,8 @@ const initialState: CalculatorState = {
   })(),
 
   pvDesign: defaultPVDesignState(),
+
+  electrical: defaultElectricalState(),
 };
 
 export default function CalculatorLogic({ children }: CalculatorLogicProps) {
@@ -770,9 +778,9 @@ export default function CalculatorLogic({ children }: CalculatorLogicProps) {
     }
   });
 
-  const calculate = useCallback(() => {
-    calculateMutation.mutate(state);
-  }, [state, calculateMutation, toast]);
+  const calculate = useCallback((opts?: { onSuccess?: () => void }) => {
+    calculateMutation.mutate(state, opts?.onSuccess ? { onSuccess: opts.onSuccess } : undefined);
+  }, [state, calculateMutation]);
 
   const updateField = useCallback(<K extends keyof CalculatorState>(
     field: K, 

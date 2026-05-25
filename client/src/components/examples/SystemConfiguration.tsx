@@ -14,8 +14,8 @@ export default function SystemConfigurationExample() {
         degradation={degradation}
         tariffSupported={tariffSupported}
         exportTariff={exportTariff}
-        pvSize={416.67} // Example calculated value
-        inverterSize={3.36} // Example calculated value
+        customerType="Residential"
+        gridConnection="Net billing"
         onEfficiencyChange={setEfficiency}
         onDegradationChange={setDegradation}
         onTariffSupportedChange={setTariffSupported}
