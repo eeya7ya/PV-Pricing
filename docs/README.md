@@ -76,8 +76,13 @@ BeforeAfterResults / Dashboard / TechnicalReport  ── tables, gauges, charts
 
 ## The calculations, documented
 
-Each engine has its own methodology document under
-[`docs/calculations/`](./calculations):
+Each engine has its own **full-math** document under
+[`docs/calculations/`](./calculations) — every equation written out, paired with
+the verbatim implementation and the exact source line, every constant table
+spelled out, and every branch/clamp made explicit. They are written so you can
+revise each equation against the code. Equations use LaTeX (`$…$` / `$$…$$`);
+view in a Markdown renderer with math support (GitHub, VS Code preview) for the
+boxed formulas to render.
 
 | # | Document | What it covers |
 |---|----------|----------------|

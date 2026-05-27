@@ -1,55 +1,69 @@
-# Calculation 8 — Battery Sizing
+# Calculation 8 — Battery Sizing (FULL MATH)
 
-**Source:** `shared/jordanPVDesign.ts` (`recommendBatterySize`, `:636`) +
-`STORAGE_CHEMISTRY_DEFAULTS` (`:262`) + `BATTERY_LIBRARY` (`:253`).
-
-A rule‑of‑thumb storage recommendation keyed to the prosumer mechanism — the
-economic case for a battery depends entirely on the import‑vs‑export spread,
-which differs per mechanism. An engineer can override the result.
+**File:** `shared/jordanPVDesign.ts` (`recommendBatterySize`, `:636`;
+`STORAGE_CHEMISTRY_DEFAULTS`, `:262`; `BATTERY_LIBRARY`, `:253`).
 
 ---
 
-## Recommendation — `recommendBatterySize(mechanism, avgDailyKWh)`
+## §1 Recommended capacity — `recommendBatterySize(mechanism, D)` `:636`
 
-| Mechanism | Recommended kWh | Rationale |
-|-----------|-----------------|-----------|
-| `M2_res` (net billing, residential) | `round(avgDailyKWh × 0.40)` | 1–1.5× evening load — closes the 0.20 import vs 0.05 export arbitrage |
-| `M2_com` (net billing, commercial) | `round(avgDailyKWh × 0.25)` | 0.5–1× midday excess; ~13 JD/kWac/mo grid fee makes self‑consumption attractive |
-| `M3` (zero export) | `round(avgDailyKWh × 0.30)` | Absorbs expected midday curtailment volume × ~1 h |
-| `M4` / `M5` | `0` | No case — every kWh already sells at a fixed / 1:1 rate |
-| `off-grid` | `round(avgDailyKWh × 1.0)` | ~1 day autonomy at 90 % DoD (LFP); 2 days at 50 % DoD (lead‑acid) |
-| `M1` (wheeling) | `0` | Wheeling does not benefit from storage at the off‑take |
-
-Returns `{ recommendedKWh, rationale }`.
-
-The intuition: storage pays off only where stored energy displaces a high
-**import** rate that you would otherwise pay. Under M4/M5/M1 export is already
-fairly priced, so there is nothing to arbitrage.
+$D$ = `avgDailyKWh` (≈ annual consumption / 365). Output rounded to integer kWh:
+$$
+\text{recommendedKWh}=\text{round}\big(\lambda_{mech}\cdot D\big),\qquad
+\lambda_{mech}=
+\begin{cases}
+0.40 & \texttt{M2\_res}\\
+0.25 & \texttt{M2\_com}\\
+0.30 & \texttt{M3}\\
+1.00 & \texttt{off-grid}\\
+0 & \texttt{M4},\ \texttt{M5}\\
+0 & \texttt{M1}\ (\text{default})
+\end{cases}
+$$
+```ts
+case 'M2_res': return { recommendedKWh: Math.round(avgDailyKWh * 0.40), rationale: ... };
+case 'M2_com': return { recommendedKWh: Math.round(avgDailyKWh * 0.25), rationale: ... };
+case 'M3':     return { recommendedKWh: Math.round(avgDailyKWh * 0.30), rationale: ... };
+case 'M4': case 'M5': return { recommendedKWh: 0, rationale: 'No economic case…' };
+case 'off-grid': return { recommendedKWh: Math.round(avgDailyKWh * 1.0), rationale: ... };
+case 'M1': default: return { recommendedKWh: 0, rationale: 'Wheeling does not benefit…' };
+```
+Economic logic: storage only pays where stored energy displaces a high
+**import** rate (M2 res arbitrage 0.20 import vs 0.05 export). M4/M5/M1 already
+price export fairly → $\lambda=0$.
 
 ---
 
-## Chemistry defaults — `STORAGE_CHEMISTRY_DEFAULTS`
+## §2 Chemistry defaults — `STORAGE_CHEMISTRY_DEFAULTS` `:262`
+| chemistry | dod | rte | degPctPerYear | cycleLife | calendarLifeYears |
+|-----------|----:|----:|--------------:|----------:|------------------:|
+| LFP | 0.90 | 0.92 | 2 | 6000 | 12 |
+| NMC | 0.80 | 0.92 | 3 | 4000 | 10 |
+| LeadAcid | 0.50 | 0.80 | 5 | 1200 | 6 |
 
-| Chemistry | DoD | Round‑trip eff. | Degradation/yr | Cycle life | Calendar life |
-|-----------|-----|------|----------------|------------|---------------|
-| LFP | 0.90 | 0.92 | 2 % | 6000 | 12 yr |
-| NMC | 0.80 | 0.92 | 3 % | 4000 | 10 yr |
-| Lead‑acid | 0.50 | 0.80 | 5 % | 1200 | 6 yr |
+Derived quantities (used by callers, not by `recommendBatterySize` itself):
+$$
+E_{usable}=E_{nom}\cdot\text{dod},\qquad
+E_{deliv/cycle}=E_{usable}\cdot\sqrt{\text{rte}}\ \text{(per direction)}
+$$
+$$
+\text{capacity}(y)=E_{nom}\,(1-\text{degPctPerYear}/100)^y
+$$
+(off-grid rationale: ~1 day autonomy at 90 % DoD LFP; 2 days at 50 % DoD lead-acid.)
 
-(DoD = depth of discharge; usable energy = nominal × DoD.)
+---
 
-## Battery library
+## §3 Battery library — `BATTERY_LIBRARY` `:253`
+| id | nominalKWh | dod | rte | cycles | chem |
+|----|----:|----:|----:|----:|------|
+| HUA-LUNA-5 | 5.0 | 1.00 | 0.95 | 6000 | LFP |
+| HUA-LUNA-15 | 15.0 | 1.00 | 0.95 | 6000 | LFP |
+| BYD-HVS-7.7 | 7.7 | 0.90 | 0.95 | 6000 | LFP |
+| BYD-HVM-22 | 22.1 | 0.90 | 0.95 | 6000 | LFP |
+| PYL-FT4800 | 7.1 | 0.95 | 0.95 | 6000 | LFP |
+| SG-SBR-9.6 | 9.6 | 1.00 | 0.95 | 6000 | LFP |
 
-`BATTERY_LIBRARY` lists market units (Huawei LUNA2000, BYD HVS/HVM, Pylontech,
-Sungrow SBR) with `nominalKWh`, `dod`, `rte` (round‑trip efficiency), `cycles`,
-and `chemistry`.
-
-## Inputs
-
-`mechanism` (the recommendation enum), `avgDailyKWh` (average daily
-consumption, ≈ annual consumption / 365).
-
-## Outputs
-
-`{ recommendedKWh, rationale }` — a sizing hint surfaced in the design panel,
-not part of the billing `CalculationResults`.
+## §4 Inputs / Outputs
+**In:** `mechanism` ∈ {M1, M2_res, M2_com, M3, M4, M5, off-grid}, `avgDailyKWh`.
+**Out:** `{ recommendedKWh, rationale }` — a design hint, not part of the billing
+`CalculationResults`.

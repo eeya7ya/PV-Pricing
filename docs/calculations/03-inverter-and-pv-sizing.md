@@ -1,92 +1,143 @@
-# Calculation 3 — Inverter & PV Sizing
+# Calculation 3 — Inverter & PV Sizing (FULL MATH)
 
-**Source:** `shared/jordanTariffs.ts` (sizing constants + helpers),
-applied in `server/routes.ts` (`/api/calculate`).
-
-When the user does **not** supply an explicit design via the PV Design module,
-the billing engine sizes the system from the customer's consumption using the
-EMRC standard specific yield and the Bylaw 58/2024 DC:AC and inverter caps.
+**Files:** constants/helpers in `shared/jordanTariffs.ts`; applied in
+`server/routes.ts` (`/api/calculate`). Used when no explicit PV-Design override
+is supplied.
 
 ---
 
-## Specific yield
+## §1 Constants
 
 ```
-SPECIFIC_YIELD_KWH_PER_KWP_YEAR  = 1800        // EMRC standard
-SPECIFIC_YIELD_KWH_PER_KWP_MONTH = 1800 / 12 = 150
+SPECIFIC_YIELD_KWH_PER_KWP_YEAR  = 1800                      (jordanTariffs.ts:739)
+SPECIFIC_YIELD_KWH_PER_KWP_MONTH = 1800 / 12 = 150           (:741)
+DC_AC_RATIO = { residential: 1.5, nonResidential: 1.2 }      (:748)
+RESIDENTIAL_INVERTER_CAP_KWAC = { singlePhase: 3.6, threePhase: 10 }   (:761)
+SUBSIDY_LOSS_TRIGGER_KW = { singlePhaseInverter: 3.6, threePhaseParallel: 10 }   (:721)
 ```
-(`jordanTariffs.ts:739`)
-
-## DC:AC ratio and the kWp ↔ kWac conversion
-
-```
-DC_AC_RATIO = { residential: 1.5, nonResidential: 1.2 }   // jordanTariffs.ts:748
-
-kWpFromKWac(kWac, class)  = kWac × ratio
-kWacFromKWp(kWp,  class)  = kWp  / ratio
-```
-
-## Target monthly generation (consumption‑based fallback)
-
-In `routes.ts` the target monthly PV generation starts as:
-```
-monthly_pv_generation = (total_annual_consumption / 12) × capFraction
-```
-where `capFraction` is the mechanism's generation cap (see
-[net‑billing](./06-net-billing-mechanisms.md)): M1 = 0.50, M2 residential =
-1.00, M2 non‑res = 0.50, M3/M4/M5 = 1.00.
-
-## Inverter sizing from monthly kWh
-
-`inverterKWacFromMonthlyKWh(monthlyKWh, class)` — `jordanTariffs.ts:785`
-```
-kWp  = monthlyKWh / 150
-kWac = kWp / DC_AC_RATIO[class]
-```
-In `routes.ts` this is further divided by system efficiency:
-```
-estimated_kwac = inverterKWacFromMonthlyKWh(monthly_pv_generation, class) / (efficiency/100)
-```
-
-## Residential inverter cap
-
-`applyResidentialInverterCap(kWac, phase, class)` — `jordanTariffs.ts:797`
-
-```
-RESIDENTIAL_INVERTER_CAP_KWAC = { singlePhase: 3.6, threePhase: 10 }
-```
-- Single‑phase residential capped at **3.6 kWac** (≈ 5.4 kWp DC at 1.5).
-- Three‑phase residential capped at **10 kWac** (≈ 15 kWp DC at 1.5).
-- Non‑residential: pass‑through (no hard kWac cap; sizing constrained by the
-  grid‑impact study).
-
-**When the cap binds**, the engine re‑derives the achievable generation from
-the capped inverter (`routes.ts:433`):
-```
-kWp_DC               = kWac × DC:AC ratio
-monthly_pv_generation= kWp_DC × 150 × (efficiency/100)
-```
-
-## Residential subsidy‑loss trigger
-
-`losesResidentialSubsidy(inverterKWac, phase)` — `jordanTariffs.ts:726`
-```
-SUBSIDY_LOSS_TRIGGER_KW = { singlePhaseInverter: 3.6, threePhaseParallel: 10 }
-```
-A residential customer on the subsidized A1 tariff **loses the subsidy** if the
-inverter exceeds 3.6 kWac (single‑phase) or 10 kWac (three‑phase parallel).
-Surfaced as `loses_residential_subsidy` in the results (advisory, non‑blocking).
+Let $\Re(\text{class})=1.5$ if residential else $1.2$.
 
 ---
 
-## Inputs
+## §2 kWp ↔ kWac — `:767`, `:773`
+$$
+\boxed{P_{dc}=P_{ac}\cdot\Re(\text{class})}\qquad
+\boxed{P_{ac}=\frac{P_{dc}}{\Re(\text{class})}}
+$$
+```ts
+export function kWpFromKWac(kWac, sectorClass) {
+  const ratio = sectorClass === 'residential' ? 1.5 : 1.2;
+  return kWac * ratio;
+}
+export function kWacFromKWp(kWp, sectorClass) { return kWp / ratio; }
+```
 
-`total_annual_consumption` (from monthly consumption), `sectorClass`,
-`net_billing_mechanism`, `connection_phase`, `efficiency`, and optionally
-`inverter_kwac` (explicit override) / `kwp_dc_override` (from PV Design).
+---
 
-## Outputs (into `annual_summary`)
+## §3 Target monthly generation (consumption-based fallback) — `routes.ts:412`
+$$
+C_{ann}=\sum_{m} C_m\quad(\text{annual consumption})
+$$
+$$
+\boxed{\;G_{mo}=\frac{C_{ann}}{12}\cdot f_{cap}\;}
+$$
+where $f_{cap}=$`mechanismGenerationCapFraction(mech, class)`:
 
-`inverter_size` (kWac), `kwp_dc`, `dc_ac_ratio`,
-`specific_yield_kwh_per_kwp_year`, `inverter_cap_kwac`, `inverter_cap_binding`,
-`pv_size` (monthly kWh), `annual_generation`.
+| Mechanism | $f_{cap}$ |
+|-----------|:---------:|
+| M1 wheeling | 0.50 |
+| M2 net billing, residential | 1.00 |
+| M2 net billing, non-residential | 0.50 |
+| M3 zero export | 1.00 |
+| M4 buy-all/sell-all | 1.00 |
+| M5 legacy | 1.00 |
+
+```ts
+const capFraction = mechanismGenerationCapFraction(mech, sectorClass);
+let monthly_pv_generation = (total_annual_consumption / 12) * capFraction;
+```
+
+---
+
+## §4 Inverter sizing from monthly kWh
+
+### 4.1 Pure helper — `inverterKWacFromMonthlyKWh(G, class)` `:785`
+$$
+P_{dc}=\frac{G}{150},\qquad \boxed{P_{ac}=\frac{P_{dc}}{\Re(\text{class})}=\frac{G}{150\,\Re}}
+$$
+```ts
+export function inverterKWacFromMonthlyKWh(monthlyKWh, sectorClass) {
+  const kWp = monthlyKWh / SPECIFIC_YIELD_KWH_PER_KWP_MONTH;
+  return kWacFromKWp(kWp, sectorClass);
+}
+```
+
+### 4.2 As applied in the engine (with efficiency) — `routes.ts:417`
+$$
+\boxed{\;P_{ac}^{est}=\frac{\text{inverterKWacFromMonthlyKWh}(G_{mo},\text{class})}{\eta}\;},\qquad \eta=\frac{\text{efficiency}}{100}
+$$
+```ts
+const estimated_kwac = inverterKWacFromMonthlyKWh(monthly_pv_generation, sectorClass) / (efficiency / 100);
+```
+
+---
+
+## §5 Residential inverter cap — `applyResidentialInverterCap(kWac, phase, class)` `:797`
+
+Non-residential → pass-through (no cap). Residential:
+$$
+\text{cap}=\begin{cases}3.6 & \text{phase}=1\\ 10 & \text{phase}=3\end{cases}
+$$
+$$
+P_{ac}=\min(P_{ac}^{in},\ \text{cap}),\qquad \text{capped}=P_{ac}^{in}>\text{cap}
+$$
+The engine feeds $P_{ac}^{in}=$ `inverter_kwac_input ?? estimated_kwac`:
+```ts
+const capped = applyResidentialInverterCap(inverter_kwac_input ?? estimated_kwac, connection_phase, sectorClass);
+const inverter_kwac = capped.kWac;
+const kwp_dc = kWpFromKWac(inverter_kwac, sectorClass);
+```
+
+### 5.1 Re-derive generation when the cap binds — `routes.ts:433`
+$$
+\text{if capped:}\quad
+P_{dc}=P_{ac}\cdot\Re,\qquad
+\boxed{G_{mo}=P_{dc}\cdot150\cdot\eta}
+$$
+```ts
+if (capped.capped) {
+  monthly_pv_generation = kwp_dc * SPECIFIC_YIELD_KWH_PER_KWP_MONTH * (efficiency / 100);
+}
+```
+
+---
+
+## §6 Residential subsidy-loss trigger — `losesResidentialSubsidy(kWac, phase)` `:726`
+$$
+\text{loses subsidy}\iff
+\begin{cases}
+P_{ac}>3.6 & \text{phase}=1\\
+P_{ac}>10 & \text{phase}=3
+\end{cases}
+$$
+Applied only for residential class (`routes.ts:468`); advisory flag
+`loses_residential_subsidy`, never blocks.
+
+---
+
+## §7 Annual generation & final kWp surfaced
+
+```
+annual_flat_generation = monthly_pv_generation × 12
+final_kwp_dc           = kwp_dc_override ?? kwp_dc            (routes.ts:463)
+```
+(Per-month spreading by seasonal shares / design override is in
+[net-billing §pvGenForMonth](./06-net-billing-mechanisms.md).)
+
+## §8 Inputs / Outputs
+**In:** `total_annual_consumption`, `sectorClass`, `net_billing_mechanism`,
+`connection_phase`, `efficiency`, `inverter_kwac?`, `kwp_dc_override?`.
+**Out (into `annual_summary`):** `inverter_size`=$P_{ac}$, `kwp_dc`,
+`dc_ac_ratio`=$\Re$, `specific_yield_kwh_per_kwp_year`=1800,
+`inverter_cap_kwac`, `inverter_cap_binding`, `mechanism_cap_fraction`=$f_{cap}$,
+`loses_residential_subsidy`.
